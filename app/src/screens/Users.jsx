@@ -8,8 +8,8 @@ import { useT, fill } from '../i18n';
 import { toast } from '../toast';
 import { friendlyError } from '../lib/errmsg';
 import Sheet from '../components/Sheet';
-import { createUser, updateUser, sendReset, transferLeads, audit } from '../lib/admin';
-import { changeUserEmail, deleteUserAccount } from '../lib/stats';
+import { createUser, updateUser, resetUserPassword, transferLeads, audit } from '../lib/admin';
+import { deleteUserAccount } from '../lib/stats';
 import { tcol, tdoc } from '../lib/tenant';
 
 // md = Managing Director (business ka poora view), tl = Team Leader (team ka operational view).
@@ -95,7 +95,7 @@ export default function Users() {
                       <b>{u.full_name || '—'}</b>
                       <span className={`role-badge role-${u.role}`}>{u.role}</span>
                     </div>
-                    <div className="feed-sub" style={{ textTransform: 'none' }}>{u.email}</div>
+                    <div className="feed-sub" style={{ textTransform: 'none' }}>{u.login_id || u.email}</div>
                     {(u.status !== 'active' || u.must_reset_password) && (
                       <div className="user-chips">
                         {u.status !== 'active' && <span className="u-chip u-chip-bad">{t('inactive')}</span>}
@@ -133,7 +133,8 @@ export default function Users() {
 function UserSheet({ user, allUsers, actor, t, onClose, onSaved }) {
   const isNew = !user;
   const [full_name, setName] = useState(user?.full_name || '');
-  const [email, setEmail] = useState(user?.email || '');
+  const [username, setUsername] = useState(user?.login_id || '');
+  const [contactEmail, setContactEmail] = useState(user?.contact_email || '');
   const [phone, setPhone] = useState(user?.phone || '');
   const [role, setRole] = useState(user?.role || 'ldr');
   const [team, setTeam] = useState(user?.team || '');
@@ -149,31 +150,23 @@ function UserSheet({ user, allUsers, actor, t, onClose, onSaved }) {
     try {
       const teamVal = role === 'tl' ? team : '';
       if (isNew) {
-        const { tempPassword } = await createUser({ full_name, email, phone, role, team: teamVal }, actor);
-        toast(`${t('uCreate')} ✓ — ${tempPassword}`);
+        const r = await createUser({ full_name, username, phone, role, team: teamVal, contact_email: contactEmail }, actor);
+        // password sirf ek baar dikhta hai — admin isse user ko de
+        window.alert(`${t('uCreate')} ✓\n\nUsername: ${r.username}\nPassword: ${r.tempPassword}\n\nPehli login par user naya password set karega.`);
       } else {
         // pehle baaki fields save karo — taaki login-email badalna fail bhi ho jaye
         // (server permission missing) to naam/phone/role kam se kam save ho jaayein
-        await updateUser(user.id, { full_name, phone, role, team: teamVal, status, attendance }, user, actor);
-        const newEmail = email.trim().toLowerCase();
-        const oldEmail = (user.email || '').toLowerCase();
-        if (newEmail && newEmail !== oldEmail) {
-          await changeUserEmail(user.id, newEmail);
-          await audit(actor, 'user.email_change', full_name || user.id, [{ field: 'email', from: oldEmail, to: newEmail }]);
-          toast(t('uEmailChanged') + ' ✓');
-        }
+        await updateUser(user.id, { full_name, phone, role, team: teamVal, status, attendance, contact_email: contactEmail.trim().toLowerCase() }, user, actor);
         toast(`${full_name} ✓`);
       }
       onSaved();
     } catch (e2) {
       console.error(e2);
-      const msg = String(e2.message || '');
-      setErr(['auth/email-already-exists', 'auth/email-already-in-use'].includes(e2.code) || msg.includes('already-exists') || msg.includes('already-in-use')
-        ? t('uEmailDup')
-        : e2.code === 'auth/invalid-email' || msg.includes('invalid-email') ? t('uEmailBad')
-          : msg.includes('insufficient permission') || msg.includes('Credential implementation') ? t('uEmailPerm')
-            : msg.includes('did not respond') ? t('uEmailPerm')
-              : t('saveFail'));
+      // server ke saaf message (license poori, username pehle se, ek admin rehna chahiye...) seedha dikhao
+      const code = String(e2.code || '');
+      setErr(code.includes('already-exists') ? t('uEmailDup')
+        : /resource-exhausted|failed-precondition|invalid-argument|permission-denied/.test(code) ? String(e2.message || t('saveFail'))
+          : t('saveFail'));
     } finally { setBusy(false); }
   }
 
@@ -213,9 +206,13 @@ function UserSheet({ user, allUsers, actor, t, onClose, onSaved }) {
       <form onSubmit={save}>
         <div className="form-group"><label>{t('uName')} *</label>
           <input className="form-control" required value={full_name} onChange={(e) => setName(e.target.value)} /></div>
-        <div className="form-group"><label>{t('email')} *</label>
-          <input className="form-control" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
-          {!isNew && <small style={{ color: 'var(--muted)' }}>{t('uEmailHelp')}</small>}</div>
+        <div className="form-group"><label>Username *</label>
+          <input className="form-control" required autoCapitalize="none" disabled={!isNew} value={username}
+            onChange={(e) => setUsername(e.target.value)} placeholder="e.g. rahul.sales" />
+          {isNew && <small style={{ color: 'var(--muted)' }}>3-30 chars: a-z, 0-9, . _ -  (baad mein badal nahi sakta)</small>}</div>
+        <div className="form-group"><label>Contact email (optional)</label>
+          <input className="form-control" type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
+          <small style={{ color: 'var(--muted)' }}>Reports / ticket updates yahin aayenge</small></div>
         <div className="form-group"><label>{t('uPhone')}</label>
           <input className="form-control" value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
         <div className="form-group"><label>{t('uRole')} *</label>
@@ -255,8 +252,8 @@ function UserSheet({ user, allUsers, actor, t, onClose, onSaved }) {
         <>
           <div className="ls-subhead">{t('uPassword')}</div>
           <button className="btn btn-ghost btn-block" disabled={busy}
-            onClick={() => sendReset(user.email, actor).then(() => toast(t('uResetSent'))).catch((e2) => toast(friendlyError(e2, t), 'err'))}>
-            <i className="fas fa-envelope" /> {t('uSendReset')}
+            onClick={() => resetUserPassword(user.id, actor, full_name).then((pw) => window.alert(`Naya password: ${pw}\n\nUser pehli login par naya password set karega.`)).catch((e2) => toast(friendlyError(e2, t), 'err'))}>
+            <i className="fas fa-key" /> Reset password
           </button>
 
           <div className="ls-subhead">{t('uTransferTitle')}</div>

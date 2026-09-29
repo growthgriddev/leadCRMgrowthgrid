@@ -2,6 +2,8 @@
   "name": "growthgrid-saas",
   "private": true,
   "scripts": {
-    "test:rules": "firebase emulators:exec --only firestore --project demo-growthgrid \"node --test tests/rules.test.mjs\""
+    "test:rules": "firebase emulators:exec --only firestore --project demo-growthgrid \"node --test tests/rules.test.mjs\"",
+    "test:functions": "firebase emulators:exec --only auth,firestore,functions --project demo-growthgrid \"node --test --test-timeout=120000 tests/functions.test.mjs\"",
+    "test": "npm run test:rules && npm run test:functions"
   }
 }

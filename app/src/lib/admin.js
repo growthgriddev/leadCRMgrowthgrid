@@ -1,27 +1,16 @@
 // Admin operations — users, config, audit, recycle, bulk. Sab isAdmin rules ke andar.
-import {
-  initializeApp, getApps, getApp,
-} from 'firebase/app';
-import { getAuth, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'firebase/auth';
+import { httpsCallable } from 'firebase/functions';
 import {
   doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc, documentId,
   query, where, writeBatch, serverTimestamp, addDoc, orderBy, limit, startAfter, increment,
 } from 'firebase/firestore';
-import { db, auth } from '../firebase';
+import { db, functions } from '../firebase';
 import { computeScore } from './scoring';
 import { revDigits } from './leads';
 import { tcol, tdoc } from './tenant';
 
-// TODO(Phase 3): fixed temp password hatakar har user ke liye random password (username login ke saath)
-const TEMP_PASSWORD = 'Temp@12345';
-
-// secondary app — naya Auth user banаte waqt admin ka session na tootе
-function secondaryAuth() {
-  const primary = getApp();
-  const name = 'secondary';
-  const app = getApps().find((a) => a.name === name) || initializeApp(primary.options, name);
-  return getAuth(app);
-}
+// Cloud Function (callable) — user/license/claims ka kaam server pe hota hai (functions/tenants.js)
+const call = (name, data) => httpsCallable(functions, name)(data).then((r) => r.data);
 
 /* ---------- AUDIT ---------- */
 // changes: [{ field, from, to }] — sirf jo actually badla. Khali ho to kuch nahi likhte.
@@ -66,32 +55,32 @@ export async function fetchAudit({ cursor = null, pageSize = 40, from = null, to
 }
 
 /* ---------- USERS ---------- */
-export async function createUser({ full_name, email, phone, role, team = '' }, actor) {
-  const sAuth = secondaryAuth();
-  const cred = await createUserWithEmailAndPassword(sAuth, email.trim().toLowerCase(), TEMP_PASSWORD);
-  const uid = cred.user.uid;
-  await setDoc(tdoc('users', uid), {
-    legacy_id: '', full_name, email: email.trim().toLowerCase(), phone: phone || '', role,
-    team: role === 'tl' ? team : '',
-    status: 'active', attendance: 'Present',
-    created_at: serverTimestamp(), last_login: null,
-    fcm_tokens: [], must_reset_password: true,
-  });
-  await signOut(sAuth);
-  await audit(actor, 'user.create', full_name || email, [], { note: `${email} · ${role}` });
-  return { uid, tempPassword: TEMP_PASSWORD };
+/** Naya user — license limit + login (username) + random password server banata hai. */
+export async function createUser({ full_name, username, phone, role, team = '', contact_email = '' }, actor) {
+  const r = await call('createUser', { full_name, username, phone: phone || '', role, team: role === 'tl' ? team : '', contact_email });
+  await audit(actor, 'user.create', full_name || username, [], { note: `${r.username} · ${role}` });
+  return { uid: r.uid, username: r.username, tempPassword: r.password };
 }
 
+const pick = (obj, keys) => Object.fromEntries(keys.filter((k) => k in obj).map((k) => [k, obj[k]]));
+
+/** role/status badalna = Cloud Function (claims + license). Baaki (attendance, phone, naam) seedha. */
 export async function updateUser(uid, patch, oldUser, actor) {
   const changes = diff(oldUser, { ...oldUser, ...patch }, Object.keys(patch));
   if (changes.length === 0) return;
-  await updateDoc(tdoc('users', uid), patch);
+  const keys = changes.map((c) => c.field);
+  const needFn = keys.includes('role') || keys.includes('status');
+  if (needFn) await call('updateUser', { uid, patch: pick(patch, keys.filter((k) => k !== 'attendance')) });
+  const direct = pick(patch, needFn ? keys.filter((k) => k === 'attendance') : keys);
+  if (Object.keys(direct).length) await updateDoc(tdoc('users', uid), direct);
   await audit(actor, 'user.update', oldUser?.full_name || uid, changes);
 }
 
-export async function sendReset(email, actor) {
-  await sendPasswordResetEmail(auth, email);
-  await audit(actor, 'user.password_reset_email', email, [], { note: 'reset email sent' });
+/** Naya random password (email reset nahi — login ID asli inbox nahi hai). Admin user ko bata dega. */
+export async function resetUserPassword(uid, actor, name = '') {
+  const r = await call('resetPassword', { uid });
+  await audit(actor, 'user.password_reset', name || uid, [], { note: 'new temp password issued' });
+  return r.password;
 }
 
 /** kisi user ki saari leads (LDR + Sales) doosre user ko transfer */

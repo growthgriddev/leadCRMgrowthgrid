@@ -2,7 +2,8 @@ import {
   doc, getDoc, getDocs, setDoc, onSnapshot, serverTimestamp,
   collection, query, where, orderBy, limit, getCountFromServer,
 } from 'firebase/firestore';
-import { db } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../firebase';
 import { tcol, tdoc } from './tenant';
 
 const IST = 5.5 * 3600 * 1000;
@@ -130,10 +131,8 @@ export const rescoreLeads = (onProgress) => runAdminTask('rescore', {}, onProgre
 export const refreshTodayAgg = () => runAdminTask('agg_today', {}, null, 60000);
 /** Kisi bhi user ko ek test push bhejo — bina lead banaye push turant test karne ke liye. */
 export const sendTestPush = (targetUid) => runAdminTask('test_push', { target_uid: targetUid }, null, 20000);
-/** User ka login email badlo (Auth + doc dono — Cloud Function). */
-export const changeUserEmail = (uid, email) => runAdminTask('user_email', { target_uid: uid, new_email: email }, null, 30000);
-/** User ko permanently delete karo (Auth + doc). force=true -> leads assigned hote hue bhi delete. */
-export const deleteUserAccount = (uid, force = false) => runAdminTask('user_delete', { target_uid: uid, force }, null, 30000);
+/** User ko permanently delete karo (Auth + doc + license wapas) — Cloud Function. force=true -> leads assigned hote hue bhi. */
+export const deleteUserAccount = (uid, force = false) => httpsCallable(functions, 'deleteUser')({ uid, force }).then((r) => r.data);
 
 /** per-user overdue followup counts */
 export async function overdueByUser(users) {

@@ -12,18 +12,70 @@
  */
 'use strict';
 
-const { onSchedule } = require('firebase-functions/v2/scheduler');
-const { onDocumentWritten } = require('firebase-functions/v2/firestore');
+const { onSchedule: _onSchedule } = require('firebase-functions/v2/scheduler');
+const { onDocumentWritten: _onDocumentWritten } = require('firebase-functions/v2/firestore');
 const { setGlobalOptions } = require('firebase-functions/v2');
 const admin = require('firebase-admin');
 const nodemailer = require('nodemailer');
 
 admin.initializeApp();
 setGlobalOptions({ region: 'asia-south1', maxInstances: 3, timeoutSeconds: 540, memory: '512MiB' });
-const db = admin.firestore();
-const FV = admin.firestore.FieldValue;
-const TS = admin.firestore.Timestamp;
-const FieldPath = admin.firestore.FieldPath;
+const { AsyncLocalStorage } = require('async_hooks');
+const rootDb = admin.firestore();
+
+// ===================================================================
+// MULTI-TENANT — har company ka data `tenants/{tid}/...` mein. tid = company slug (immutable).
+// `db` neeche ka object hai jo AsyncLocalStorage ke current tenant ke path mein padhta/likhta hai, isliye
+// purana `db.collection('leads')` code waisa hi chalta hai. Tenant context ke bahar use karne par ERROR
+// (chup-chaap galat jagah likhne se behtar). Tenant-root (tenants/..., plans) ke liye `rootDb`.
+// ===================================================================
+const als = new AsyncLocalStorage();
+const curTid = () => {
+  const st = als.getStore();
+  if (!st || !st.tid) throw new Error('no-tenant-context');
+  return st.tid;
+};
+const tpath = (p) => 'tenants/' + curTid() + '/' + p;
+const db = {
+  collection: (p) => rootDb.collection(tpath(p)),
+  doc: (p) => rootDb.doc(tpath(p)),
+  batch: () => rootDb.batch(),
+  getAll: (...refs) => rootDb.getAll(...refs),
+  runTransaction: (fn, opts) => rootDb.runTransaction(fn, opts),
+};
+const runForTenant = (tid, fn, extra) => als.run({ tid, ...(extra || {}) }, fn);
+
+/** company ka effective state (app/src/lib/tenantState.js ka mirror) */
+function tenantState(t, now = Date.now()) {
+  if (!t) return 'cancelled';
+  if (t.status === 'cancelled') return 'cancelled';
+  if (t.status === 'suspended') return 'suspended';
+  const paid = t.paid_until && t.paid_until.toMillis ? t.paid_until.toMillis() : null;
+  if (paid == null || now <= paid) return 'active';
+  const acc = t.access_until && t.access_until.toMillis ? t.access_until.toMillis() : paid + (t.grace_days == null ? 3 : t.grace_days) * 86400000;
+  return now <= acc ? 'grace' : 'suspended';
+}
+
+/** saari chalti (active/grace) companies par fn chalao; ek fail ho to baaki chalein */
+async function forEachActiveTenant(fn) {
+  const snap = await rootDb.collection('tenants').get();
+  for (const d of snap.docs) {
+    const t = d.data();
+    const st = tenantState(t);
+    if (st !== 'active' && st !== 'grace') continue;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await runForTenant(d.id, () => fn(d.id, t), { tenant: t });
+    } catch (e) { console.error('tenant ' + d.id + ' failed', e && e.message || e); }
+  }
+}
+
+// Wrappers — triggers path `tenants/{tid}/...` par chalte hain aur handler us tenant ke context mein
+const onDocumentWritten = (path, h) => _onDocumentWritten(path, (event) => runForTenant(event.params.tid, () => h(event)));
+const onDocumentCreated = (path, h) => _onDocumentCreated(path, (event) => runForTenant(event.params.tid, () => h(event)));
+const onTenantSchedule = (opts, fn) => _onSchedule(opts, () => forEachActiveTenant(fn));
+const appUrl = () => MAIL_APP_URL + '/' + curTid();
+const { FieldValue: FV, Timestamp: TS, FieldPath } = require('firebase-admin/firestore');
 
 const IST = 5.5 * 3600 * 1000;
 const LOST = ['dead', 'lost'];
@@ -769,7 +821,7 @@ function weeklyEmailHtml(report) {
     heading: 'Weekly Report — Week ' + (report.week_num || '') + ' / ' + (report.year || ''),
     preheader: `Team: ${report.team?.calls || 0} calls, ${report.team?.closed || 0} orders, ${fm(report.team?.revenue)}`,
     bodyHtml: body,
-    cta: { text: 'Open Reports', url: MAIL_APP_URL + '/' },
+    cta: { text: 'Open Reports', url: appUrl() },
   });
 }
 
@@ -778,7 +830,7 @@ async function sendWeeklyEmail(report) {
     const mail = await getMailTransport();
     if (!mail) { console.log('weekly email skipped — not configured'); return { sent: false, reason: 'not-configured' }; }
     const admins = (await db.collection('users').where('role', '==', 'admin').where('status', '==', 'active').get())
-      .docs.map((d) => d.data().email).filter(Boolean);
+      .docs.map((d) => d.data().contact_email).filter(Boolean);
     if (!admins.length) return { sent: false, reason: 'no-admin-email' };
     await mail.transporter.sendMail({
       from: `"GrowthGrid CRM" <${mail.email}>`,
@@ -868,7 +920,7 @@ async function buildWeekly(opts = {}) {
 // jobs the (1am/1:30am/3am). Google sirf 3 job/account free deta hai, hum 5 use kar rahe the (+slaScan,
 // +weeklyReport) — 2 extra job ka ~₹17/month recurring lagta tha. Teeno roz-raat-wale maintenance kaam
 // hain, ek hi function mein same tarteeb se chalte hain — behavior bilkul same, sirf 1 scheduler job kam.
-exports.dailyMaintenance = onSchedule({ schedule: '0 1 * * *', timeZone: 'Asia/Kolkata' }, async () => {
+exports.dailyMaintenance = onTenantSchedule({ schedule: '0 1 * * *', timeZone: 'Asia/Kolkata' }, async () => {
   // pichhle 1 din DOBARA aggregate karo (aaj + kal) — jin leads ka status baad me badla (fresh ->
   // lost) un dino ka `dash` current rahe. Pehle 5 din tak jaate the (~11k reads/raat) — measured
   // audit se pata chala 2+ din purani lead ka status shayad hi badalta hai, isliye 2 din kaafi hai.
@@ -893,7 +945,7 @@ exports.dailyMaintenance = onSchedule({ schedule: '0 1 * * *', timeZone: 'Asia/K
   console.log('purged', n);
 });
 
-exports.weeklyReport = onSchedule({ schedule: '0 4 * * 1', timeZone: 'Asia/Kolkata' }, async () => {
+exports.weeklyReport = onTenantSchedule({ schedule: '0 4 * * 1', timeZone: 'Asia/Kolkata' }, async () => {
   await buildWeekly();
 });
 
@@ -943,7 +995,7 @@ async function rescoreAll(onProgress) {
   return { done, total };
 }
 
-exports.adminTask = onDocumentWritten('admin_tasks/{taskId}', async (event) => {
+exports.adminTask = onDocumentWritten('tenants/{tid}/admin_tasks/{taskId}', async (event) => {
   const after = event.data && event.data.after && event.data.after.data();
   if (!after || after.status !== 'pending') return;
   const ref = event.data.after.ref;
@@ -961,29 +1013,8 @@ exports.adminTask = onDocumentWritten('admin_tasks/{taskId}', async (event) => {
       await notify(after.target_uid, 'test', 'test', '', null);
       result = { sent: true };
     }
-    else if (id === 'user_email') {
-      // Login email badlo — Firebase Auth + users/{uid} doc dono (client SDK ye nahi kar sakta).
-      const uid = String(after.target_uid || '');
-      const email = String(after.new_email || '').trim().toLowerCase();
-      if (!uid || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('valid uid + new_email chahiye');
-      await admin.auth().updateUser(uid, { email, emailVerified: false });
-      await db.doc('users/' + uid).set({ email, updated_at: FV.serverTimestamp() }, { merge: true });
-      result = { uid, email };
-    }
-    else if (id === 'user_delete') {
-      const uid = String(after.target_uid || '');
-      if (!uid) throw new Error('target_uid chahiye');
-      if (!after.force) {
-        const [l1, l2] = await Promise.all([
-          db.collection('leads').where('ldr_uid', '==', uid).limit(1).get(),
-          db.collection('leads').where('sales_uid', '==', uid).limit(1).get(),
-        ]);
-        if (!l1.empty || !l2.empty) { const e = new Error('has-leads'); e.hasLeads = true; throw e; }
-      }
-      await admin.auth().deleteUser(uid).catch((e) => { if (e.code !== 'auth/user-not-found') throw e; });
-      await db.doc('users/' + uid).delete();
-      result = { uid, deleted: true };
-    }
+    // user_email / user_delete yahan se hata diye — client ka diya uid seedha admin.auth() par chalta tha (cross-company risk).
+    // Ab tenants.js ke callables (updateUser / deleteUser) company + license check ke saath karte hain.
     else throw new Error('unknown task: ' + id);
     await ref.set({ status: 'done', result, done_at: FV.serverTimestamp() }, { merge: true });
   } catch (e) {
@@ -1009,7 +1040,7 @@ async function pickSalesUser() {
   return loads[0];
 }
 
-exports.assignSales = onDocumentWritten('leads/{id}', async (event) => {
+exports.assignSales = onDocumentWritten('tenants/{tid}/leads/{id}', async (event) => {
   const before = event.data.before.exists ? event.data.before.data() : null;
   const after = event.data.after.exists ? event.data.after.data() : null;
   if (!after) return;
@@ -1085,7 +1116,7 @@ exports.assignSales = onDocumentWritten('leads/{id}', async (event) => {
 // Sab queries bounded (limit<=50) + time-window floors — alerted docs window se bahar
 // nikal jaati hain, dobara-dobara read nahi hoti. Naya Scheduler job NAHI (cost).
 // ===================================================================
-exports.slaScan = onSchedule({ schedule: 'every 15 minutes', timeZone: 'Asia/Kolkata' }, async () => {
+exports.slaScan = onTenantSchedule({ schedule: 'every 15 minutes', timeZone: 'Asia/Kolkata' }, async () => {
   const settings = await getSettings();
   const now = Date.now();
 
@@ -1357,7 +1388,7 @@ async function maybeReportEmail(settings, nowMs) {
   const mail = await getMailTransport();
   if (!mail) { console.log('report email skip — Gmail not configured'); if (wantDaily) await stRef.set({ report_email_date: today }, { merge: true }); return; }
   const admins = (await db.collection('users').where('role', '==', 'admin').where('status', '==', 'active').get())
-    .docs.map((d) => d.data().email).filter(Boolean);
+    .docs.map((d) => d.data().contact_email).filter(Boolean);
   if (!admins.length) return;
   const usersSnap = await db.collection('users').get();
   const uById = {}; usersSnap.forEach((u) => { uById[u.id] = u.data(); });
@@ -1549,14 +1580,14 @@ function reportEmailHtml(label, rangeLabel, sales, ldr) {
     heading: `${label} Leads Report — ${rangeLabel}`,
     preheader: `Sales ${nf(sales.T.interactions)} &middot; LDR ${nf(ldr.T.interactions)} interactions`,
     bodyHtml: body,
-    cta: { text: 'Open CRM Reports', url: MAIL_APP_URL + '/' },
+    cta: { text: 'Open CRM Reports', url: appUrl() },
   });
 }
 
 // ===================================================================
 // HELP — Ask-AI (Anthropic) + Support Tickets
 // ===================================================================
-const { onDocumentCreated } = require('firebase-functions/v2/firestore');
+const { onDocumentCreated: _onDocumentCreated } = require('firebase-functions/v2/firestore');
 
 const CRM_GUIDE = [
   'GrowthGrid CRM — fashion wholesale lead system.',
@@ -1771,7 +1802,7 @@ async function cacheAiAnswer(question, answer, role) {
   } catch (err) { console.error('cacheAiAnswer', err.message || err); return null; }
 }
 
-exports.helpAsk = onDocumentWritten('help_queries/{id}', async (event) => {
+exports.helpAsk = onDocumentWritten('tenants/{tid}/help_queries/{id}', async (event) => {
   const before = event.data && event.data.before && event.data.before.exists ? event.data.before.data() : null;
   const after = event.data && event.data.after && event.data.after.exists ? event.data.after.data() : null;
   if (!after) return;
@@ -1839,10 +1870,10 @@ exports.helpAsk = onDocumentWritten('help_queries/{id}', async (event) => {
 
 async function adminEmails() {
   const snap = await db.collection('users').where('role', '==', 'admin').where('status', '==', 'active').get();
-  return snap.docs.map((d) => d.data().email).filter(Boolean);
+  return snap.docs.map((d) => d.data().contact_email).filter(Boolean);
 }
 
-exports.ticketCreated = onDocumentCreated('tickets/{id}', async (event) => {
+exports.ticketCreated = onDocumentCreated('tenants/{tid}/tickets/{id}', async (event) => {
   const tk = event.data && event.data.data();
   if (!tk) return;
   const id = event.params.id;
@@ -1871,14 +1902,14 @@ exports.ticketCreated = onDocumentCreated('tickets/{id}', async (event) => {
           heading: 'New help ticket',
           preheader: (tk.by_name || 'Someone') + ': ' + tk.subject,
           bodyHtml: body,
-          cta: { text: 'Open Tickets', url: MAIL_APP_URL + '/' },
+          cta: { text: 'Open Tickets', url: appUrl() },
         }),
       });
     }
   } catch (e) { console.error('ticket email failed (non-fatal)', e.message || e); }
 });
 
-exports.ticketResolved = onDocumentWritten('tickets/{id}', async (event) => {
+exports.ticketResolved = onDocumentWritten('tenants/{tid}/tickets/{id}', async (event) => {
   const before = event.data.before.exists ? event.data.before.data() : null;
   const after = event.data.after.exists ? event.data.after.data() : null;
   if (!after || !before) return;
@@ -1900,7 +1931,7 @@ exports.ticketResolved = onDocumentWritten('tickets/{id}', async (event) => {
   try {
     const mail = await getMailTransport();
     const owner = (await db.doc('users/' + after.by_uid).get()).data();
-    if (mail && owner && owner.email) {
+    if (mail && owner && owner.contact_email) {
       const solved = after.status === 'solved';
       const eBody = mbP(solved
         ? 'Aapki help ticket <b>solve</b> ho gayi hai. 🎉'
@@ -1911,13 +1942,13 @@ exports.ticketResolved = onDocumentWritten('tickets/{id}', async (event) => {
         + (solved ? mbMuted('Agar issue phir aaye to CRM ke Help section me dobara pooch sakte hain.') : '');
       await mail.transporter.sendMail({
         from: '"GrowthGrid CRM" <' + mail.email + '>',
-        to: owner.email,
+        to: owner.contact_email,
         subject: (solved ? 'Solved — ' : 'Update — ') + after.subject,
         html: emailShell({
           heading: solved ? 'Your ticket is solved' : 'Update on your ticket',
           preheader: after.admin_note || after.subject,
           bodyHtml: eBody,
-          cta: { text: 'Open Help', url: MAIL_APP_URL + '/' },
+          cta: { text: 'Open Help', url: appUrl() },
         }),
       });
     }
@@ -1939,3 +1970,6 @@ exports.ticketResolved = onDocumentWritten('tickets/{id}', async (event) => {
     }
   }
 });
+
+// ---- company + user management (callable) ----
+Object.assign(exports, require('./tenants'));

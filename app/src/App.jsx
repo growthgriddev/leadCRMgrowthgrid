@@ -8,6 +8,7 @@ import { useT, LANGS } from './i18n';
 import { getTheme, setTheme } from './lib/theme';
 import { useBackClose } from './lib/useBackClose';
 import { getLead } from './lib/leads';
+import { graceLeftMs } from './lib/tenantState';
 import { watchForUpdate, reloadForUpdate, dismissUpdate } from './lib/appUpdate';
 import { onForegroundPush } from './lib/push';
 import { startPresence } from './lib/presence';
@@ -83,7 +84,7 @@ const primaryLeadNav = (role) => (role === 'ldr' ? 'fresh' : role === 'sales' ? 
 const followupNav = (role) => (role === 'ldr' ? 'pendingcalls' : 'salesfollowup');
 
 export default function App() {
-  const { loading, fbUser, user, role, signOut } = useAuth();
+  const { loading, fbUser, user, role, signOut, claims, isSuper, tenant, tenantState: tState } = useAuth();
   const cfg = useConfig();
   const { t, lang, setLang } = useT();
   const [themeMode, setThemeMode] = useState(getTheme());
@@ -162,6 +163,25 @@ export default function App() {
   }, []);
 
   if (loading) return <div className="full-center"><div className="spinner" /><span>{t('loading')}</span></div>;
+  // Login hai par company/claims nahi: super admin (panel Phase 2 mein) ya bekaar account
+  if (fbUser && claims && !claims.tid) {
+    return (
+      <div className="full-center">
+        <i className="fas fa-user-shield" style={{ fontSize: 30, color: 'var(--muted)' }} />
+        <span>{isSuper ? 'Super Admin panel jaldi aa raha hai.' : 'Is account ke saath koi company nahi juda hai.'}</span>
+        <button className="btn btn-ghost" onClick={signOut}>{t('logout')}</button>
+      </div>
+    );
+  }
+  if (fbUser && tState === 'cancelled') {
+    return (
+      <div className="full-center">
+        <i className="fas fa-ban" style={{ fontSize: 30, color: 'var(--danger)' }} />
+        <span>{(tenant?.name ? tenant.name + ': ' : '') + 'Ye account band hai. Support se sampark karein.'}</span>
+        <button className="btn btn-ghost" onClick={signOut}>{t('logout')}</button>
+      </div>
+    );
+  }
   if (!fbUser || !user || user.must_reset_password) return <Login />;
   if (user.status && user.status !== 'active') {
     return (
@@ -197,8 +217,22 @@ export default function App() {
     { key: '__more', icon: 'fa-bars', tKey: 'nMore' },
   ];
 
+  // Payment/suspend banner — rules writes khud rok deti hain; ye sirf user ko wajah batata hai
+  let payBanner = null;
+  if (tState === 'grace') {
+    const d = Math.max(0, Math.ceil((graceLeftMs(tenant) || 0) / 86400000));
+    payBanner = { warn: true, text: `Payment due hai — ${d} din mein payment nahi hui to account view-only ho jayega.` };
+  } else if (tState === 'suspended') {
+    payBanner = { warn: false, text: 'Account view-only hai (payment pending). Naya data add/edit nahi ho sakta — admin se sampark karein.' };
+  }
+
   return (
     <div className="app">
+      {payBanner && (
+        <div style={{ background: payBanner.warn ? '#b45309' : '#b91c1c', color: '#fff', padding: '6px 12px', fontSize: 13, textAlign: 'center' }}>
+          <i className="fas fa-triangle-exclamation" /> {payBanner.text}
+        </div>
+      )}
       <header className="topbar">
         <button className="icon-btn" onClick={() => setMenuOpen(true)} aria-label="Menu"><i className="fas fa-bars" /></button>
         <h2>{current ? t(current.tKey) : t('appName')}</h2>
