@@ -1,12 +1,13 @@
 import { collection, query, where, orderBy, limit, startAfter, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
+import { tcol, tdoc } from './tenant';
 
 /**
  * Activity feed (Call History). admin -> sabki, warna sirf apni.
  * @returns {{ rows, cursor, done }}
  */
 export async function fetchActivityFeed({ role, uid, cursor = null, pageSize = 30, from = null, to = null }) {
-  const parts = [collection(db, 'activity')];
+  const parts = [tcol('activity')];
   if (role !== 'admin') parts.push(where('uid', '==', uid));
   if (from) parts.push(where('at', '>=', from));
   if (to) parts.push(where('at', '<=', to));
@@ -24,7 +25,7 @@ export async function fetchActivityFeed({ role, uid, cursor = null, pageSize = 3
 /** Ek lead ki poori activity timeline (newest first) */
 export async function fetchLeadActivity(leadId, max = 60) {
   const q = query(
-    collection(db, 'activity'),
+    tcol('activity'),
     where('lead_id', '==', leadId),
     orderBy('at', 'desc'),
     limit(max),
@@ -35,7 +36,7 @@ export async function fetchLeadActivity(leadId, max = 60) {
 
 /** Ek lead ke orders (0-3 hote hain — client-side sort, extra index nahi chahiye) */
 export async function fetchLeadOrders(leadId) {
-  const q = query(collection(db, 'orders'), where('lead_id', '==', leadId));
+  const q = query(tcol('orders'), where('lead_id', '==', leadId));
   const snap = await getDocs(q);
   return snap.docs
     .map((d) => ({ id: d.id, ...d.data() }))

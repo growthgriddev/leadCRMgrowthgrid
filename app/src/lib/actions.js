@@ -5,6 +5,7 @@ import {
 import { db } from '../firebase';
 import { computeScore } from './scoring';
 import { isSalesOpen } from './leads';
+import { tcol, tdoc } from './tenant';
 
 const LOST = ['lost', 'dead'];
 
@@ -50,10 +51,10 @@ export async function logLeadAction(p) {
   const now = serverTimestamp();
 
   const batch = writeBatch(db);
-  const leadRef = doc(db, 'leads', lead.id);
+  const leadRef = tdoc('leads', lead.id);
 
   // 1) activity
-  const actRef = doc(collection(db, 'activity'));
+  const actRef = doc(tcol('activity'));
   const isOrder = stage.includes('order');
   const action = isOrder ? 'order'
     : stage === 'qualified' ? 'stage_change'
@@ -150,7 +151,7 @@ export async function logLeadAction(p) {
 
   // 3) order
   if (isOrder && orderAmount > 0) {
-    const ordRef = doc(collection(db, 'orders'));
+    const ordRef = doc(tcol('orders'));
     batch.set(ordRef, {
       lead_id: lead.id,
       lead_name: lead.name || '',
@@ -170,7 +171,7 @@ export async function logLeadAction(p) {
   // Live Monitor "kisne aakhri baar kaam kiya" — user doc pe timestamp (Monitor bina extra
   // query ke ye padh leta hai). Presence heartbeat (last_seen) sirf "app khuli hai" batata hai;
   // ye "asli kaam" ka signal hai.
-  if (actor.uid) batch.set(doc(db, 'users', actor.uid), { last_worked_at: now }, { merge: true });
+  if (actor.uid) batch.set(tdoc('users', actor.uid), { last_worked_at: now }, { merge: true });
 
   batch.update(leadRef, upd);
   await batch.commit();
@@ -194,7 +195,7 @@ const FLAT_FIELDS = {
 export async function markUrgent(lead, actor, remark, newAssignee) {
   const now = serverTimestamp();
   const batch = writeBatch(db);
-  const leadRef = doc(db, 'leads', lead.id);
+  const leadRef = tdoc('leads', lead.id);
 
   const fromArchive = !!lead.archived;
   const upd = {
@@ -240,12 +241,12 @@ export async function markUrgent(lead, actor, remark, newAssignee) {
 
   batch.update(leadRef, upd);
   if (lead.phone_digits) {
-    batch.set(doc(db, 'phone_index', lead.phone_digits), {
+    batch.set(tdoc('phone_index', lead.phone_digits), {
       stage: upd.sales_status || upd.status || lead.sales_status || lead.status || '',
       owner_name: upd.sales_name || upd.ldr_name || lead.sales_name || lead.ldr_name || '',
     }, { merge: true });
   }
-  batch.set(doc(collection(db, 'activity')), {
+  batch.set(doc(tcol('activity')), {
     lead_id: lead.id, lead_name: lead.name || '', at: now,
     uid: actor.uid, actor_name: actor.name || '', action: 'urgent',
     from_status: lead.sales_status || lead.status || '', to_status: fromArchive ? 'reinquiry after archive' : 'urgent re-inquiry',
@@ -263,11 +264,11 @@ export async function markUrgent(lead, actor, remark, newAssignee) {
 export async function giveMoreAttempts(lead, actor, remark) {
   const now = serverTimestamp();
   const batch = writeBatch(db);
-  batch.update(doc(db, 'leads', lead.id), {
+  batch.update(tdoc('leads', lead.id), {
     attempts: 0, review_queue: false, review_reason: '',
     updated_at: now, last_action_at: now, last_action_by: actor.uid, last_action_by_name: actor.name || '',
   });
-  batch.set(doc(collection(db, 'activity')), {
+  batch.set(doc(tcol('activity')), {
     lead_id: lead.id, lead_name: lead.name || '', at: now,
     uid: actor.uid, actor_name: actor.name || '', action: 'review_resolve',
     from_status: 'review queue', to_status: lead.status || '',
@@ -284,7 +285,7 @@ export async function giveMoreAttempts(lead, actor, remark) {
 export async function reassignLead(lead, actor, assignee) {
   const now = serverTimestamp();
   const batch = writeBatch(db);
-  const leadRef = doc(db, 'leads', lead.id);
+  const leadRef = tdoc('leads', lead.id);
   const upd = {
     updated_at: now, last_action_at: now,
     last_action_by: actor.uid, last_action_by_name: actor.name || '',
@@ -304,19 +305,19 @@ export async function reassignLead(lead, actor, assignee) {
   if (changes.length === 0) return { changed: 0 };
 
   batch.update(leadRef, upd);
-  batch.set(doc(collection(db, 'activity')), {
+  batch.set(doc(tcol('activity')), {
     lead_id: lead.id, lead_name: lead.name || '', at: now,
     uid: actor.uid, actor_name: actor.name || '', action: 'reassign',
     from_status: lead.sales_status || lead.status || '', to_status: lead.sales_status || lead.status || '',
     amount: 0, channel: 'app',
     remark: changes.map((c) => `${c.field}: ${c.from} → ${c.to}`).join(' · ').slice(0, 500),
   });
-  batch.set(doc(collection(db, 'audit')), {
+  batch.set(doc(tcol('audit')), {
     at: now, uid: actor.uid, actor_name: actor.name || '',
     action: 'lead.reassign', target: lead.name || `#${lead.id}`, changes,
   });
   if (lead.phone_digits) {
-    batch.set(doc(db, 'phone_index', lead.phone_digits), {
+    batch.set(tdoc('phone_index', lead.phone_digits), {
       owner_name: upd.sales_name || upd.ldr_name || lead.sales_name || lead.ldr_name || '',
     }, { merge: true });
   }

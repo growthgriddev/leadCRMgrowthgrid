@@ -7,6 +7,7 @@ import { db } from '../firebase';
 import { dayStart, dayEnd } from './daterange';
 import { ownedBy } from './leadStage';
 import { workSplitStats } from './dashboardStats';
+import { tcol, tdoc } from './tenant';
 
 const PAGE_SIZE = 20;
 
@@ -24,7 +25,7 @@ const statusField = (teamRole) => (teamRole === 'sales' ? 'sales_status' : 'stat
 export async function fetchDashLeadsPage({ teamRole, memberUid, memberIds, filter, cursor = null, pageSize = PAGE_SIZE }) {
   const ownerF = ownerField(teamRole);
   const stF = statusField(teamRole);
-  const parts = [collection(db, 'leads')];
+  const parts = [tcol('leads')];
   if (memberUid) parts.push(where(ownerF, '==', memberUid));
   else if (memberIds && memberIds.length) parts.push(where(ownerF, 'in', memberIds.slice(0, 30)));
 
@@ -132,12 +133,12 @@ export async function fetchDashLeadsAll({ teamRole, memberUid, memberIds, filter
     for (let i = 0; i < ids.length; i += 30) {
       try {
         // eslint-disable-next-line no-await-in-loop
-        const s = await getDocs(query(collection(db, 'leads'), where(documentId(), 'in', ids.slice(i, i + 30))));
+        const s = await getDocs(query(tcol('leads'), where(documentId(), 'in', ids.slice(i, i + 30))));
         s.forEach((d) => out.push({ id: d.id, ...d.data() }));
       } catch {
         // eslint-disable-next-line no-await-in-loop
         await Promise.all(ids.slice(i, i + 30).map(async (id) => {
-          try { const one = await getDocs(query(collection(db, 'leads'), where(documentId(), '==', id))); one.forEach((d) => out.push({ id: d.id, ...d.data() })); } catch { /* skip */ }
+          try { const one = await getDocs(query(tcol('leads'), where(documentId(), '==', id))); one.forEach((d) => out.push({ id: d.id, ...d.data() })); } catch { /* skip */ }
         }));
       }
     }
@@ -169,7 +170,7 @@ export async function fetchDashLeadsAll({ teamRole, memberUid, memberIds, filter
   }
 
   const ownerF = ownerField(teamRole);
-  const parts = [collection(db, 'leads')];
+  const parts = [tcol('leads')];
   if (memberUid) parts.push(where(ownerF, '==', memberUid));
   else if (memberIds && memberIds.length) parts.push(where(ownerF, 'in', memberIds.slice(0, 30)));
 

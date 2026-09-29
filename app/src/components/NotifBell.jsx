@@ -9,6 +9,7 @@ import { useBackClose } from '../lib/useBackClose';
 import { toast } from '../toast';
 import { friendlyError } from '../lib/errmsg';
 import { enablePush, pushPermission, getLocalToken, VAPID_KEY } from '../lib/push';
+import { tcol, tdoc } from '../lib/tenant';
 
 const NOTIF_ICON = {
   new_lead: 'fa-fire', assign_fail: 'fa-triangle-exclamation', sla: 'fa-clock',
@@ -26,7 +27,7 @@ export default function NotifBell({ onOpenLead }) {
   useEffect(() => {
     if (!user) return;
     const q = query(
-      collection(db, 'notifications'),
+      tcol('notifications'),
       where('to_uid', '==', user.id),
       orderBy('created_at', 'desc'),
       limit(30),
@@ -61,20 +62,20 @@ export default function NotifBell({ onOpenLead }) {
   }
 
   function markRead(id) {
-    updateDoc(doc(db, 'notifications', id), { read: true }).catch(() => {});
+    updateDoc(tdoc('notifications', id), { read: true }).catch(() => {});
   }
   function markAll() {
     items.filter((i) => !i.read).forEach((i) => markRead(i.id));
   }
   function dismiss(id) {
     setItems((list) => list.filter((i) => i.id !== id)); // turant UI se hatao
-    deleteDoc(doc(db, 'notifications', id)).catch(() => {});
+    deleteDoc(tdoc('notifications', id)).catch(() => {});
   }
   function clearRead() {
     const read = items.filter((i) => i.read);
     if (!read.length) return;
     setItems((list) => list.filter((i) => !i.read));
-    read.forEach((i) => deleteDoc(doc(db, 'notifications', i.id)).catch(() => {}));
+    read.forEach((i) => deleteDoc(tdoc('notifications', i.id)).catch(() => {}));
     toast(t('notifCleared'));
   }
 

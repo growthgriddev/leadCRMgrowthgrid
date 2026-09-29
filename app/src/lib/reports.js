@@ -9,6 +9,7 @@ import { db } from '../firebase';
 import { dayStart, dayEnd } from './daterange';
 import { getRangeStats, daysBetween } from './stats';
 import { fmtStatus } from './format';
+import { tcol, tdoc } from './tenant';
 
 // Firestore `limit()` ka max 10000 hai — cap 9500 se zyada mat rakho (fetchAll `cap+1` limit lagata hai).
 export const REPORTS = [
@@ -54,7 +55,7 @@ export async function buildReport(key, from, to, cfg) {
 
   if (key === 'leads_created') {
     const { docs, capped } = await fetchAll([
-      collection(db, 'leads'),
+      tcol('leads'),
       where('created_at', '>=', dayStart(from)), where('created_at', '<=', dayEnd(to)),
       orderBy('created_at', 'desc'),
     ], def.cap);
@@ -69,7 +70,7 @@ export async function buildReport(key, from, to, cfg) {
     // "Is range mein jitni leads pe baat hui" — data-analyst report. Activity (range) group-by lead,
     // fir un leads ke current docs merge. Bounded: 8k activity + 30-batched lead fetch (max 1500).
     const { docs: acts, capped: actCap } = await fetchAll([
-      collection(db, 'activity'),
+      tcol('activity'),
       where('at', '>=', dayStart(from)), where('at', '<=', dayEnd(to)),
       orderBy('at', 'desc'),
     ], 9500);
@@ -88,7 +89,7 @@ export async function buildReport(key, from, to, cfg) {
     if (ids.length > def.cap) return { headers: [], rows: [], capped: true };
     const leadMap = new Map();
     for (let i = 0; i < ids.length; i += 30) {
-      const snap = await getDocs(query(collection(db, 'leads'), where(documentId(), 'in', ids.slice(i, i + 30))));
+      const snap = await getDocs(query(tcol('leads'), where(documentId(), 'in', ids.slice(i, i + 30))));
       snap.forEach((d) => leadMap.set(d.id, d.data()));
     }
     const fromMs = dayStart(from).getTime();
@@ -114,7 +115,7 @@ export async function buildReport(key, from, to, cfg) {
 
   if (key === 'leads_qualified') {
     const { docs, capped } = await fetchAll([
-      collection(db, 'leads'),
+      tcol('leads'),
       where('qualified_at', '>=', dayStart(from)), where('qualified_at', '<=', dayEnd(to)),
       orderBy('qualified_at', 'desc'),
     ], def.cap);
@@ -127,7 +128,7 @@ export async function buildReport(key, from, to, cfg) {
 
   if (key === 'activity') {
     const { docs, capped } = await fetchAll([
-      collection(db, 'activity'),
+      tcol('activity'),
       where('at', '>=', dayStart(from)), where('at', '<=', dayEnd(to)),
       orderBy('at', 'desc'),
     ], def.cap);
@@ -143,7 +144,7 @@ export async function buildReport(key, from, to, cfg) {
 
   if (key === 'orders') {
     const { docs, capped } = await fetchAll([
-      collection(db, 'orders'),
+      tcol('orders'),
       where('order_date', '>=', dayStart(from)), where('order_date', '<=', dayEnd(to)),
       orderBy('order_date', 'desc'),
     ], def.cap);
@@ -178,7 +179,7 @@ export async function buildReport(key, from, to, cfg) {
   if (key === 'reinq_archive') {
     // Archive (WhatsApp campaign) ke baad jo leads DOBARA enquiry me aayi.
     const { docs, capped } = await fetchAll([
-      collection(db, 'leads'),
+      tcol('leads'),
       where('reinq_after_archive_at', '>=', dayStart(from)), where('reinq_after_archive_at', '<=', dayEnd(to)),
       orderBy('reinq_after_archive_at', 'desc'),
     ], def.cap);
@@ -200,7 +201,7 @@ export async function buildReport(key, from, to, cfg) {
     // `stats_daily/{date}.dash` se lead-id list + call-count, phir un leads ke current
     // doc se status/name/phone. LDR aur Sales alag TAB (ek Excel file).
     const days = daysBetween(from, to);
-    const snaps = await Promise.all(days.map((d) => getDoc(doc(db, 'stats_daily', d))));
+    const snaps = await Promise.all(days.map((d) => getDoc(tdoc('stats_daily', d))));
     const uById = {}; (cfg?.users || []).forEach((u) => { uById[u.id] = u; });
     const CATS = { fresh: 'Fresh', reinq: 'Urgent', sched: 'Scheduled', offsched: 'Off-Schedule' };
     let missing = 0;
@@ -236,7 +237,7 @@ export async function buildReport(key, from, to, cfg) {
     const capped = ids.length > CAP;
     const leadMap = new Map();
     for (let i = 0; i < Math.min(ids.length, CAP); i += 30) {
-      const snap = await getDocs(query(collection(db, 'leads'), where(documentId(), 'in', ids.slice(i, i + 30))));
+      const snap = await getDocs(query(tcol('leads'), where(documentId(), 'in', ids.slice(i, i + 30))));
       snap.forEach((d) => leadMap.set(d.id, d.data()));
     }
 
@@ -266,11 +267,11 @@ export async function buildReport(key, from, to, cfg) {
   }
 
   if (key === 'pipeline_now') {
-    const L = (s) => [collection(db, 'leads'), where('status', '==', s)];
-    const SS = (s) => [collection(db, 'leads'), where('sales_status', '==', s)];
+    const L = (s) => [tcol('leads'), where('status', '==', s)];
+    const SS = (s) => [tcol('leads'), where('sales_status', '==', s)];
     const [fresh, callback, qualified, hot, visit, video, followup, order, deadL, lostL, lostS, deadS] = await Promise.all([
-      countWhere(collection(db, 'leads'), where('status', 'in', ['fresh', 'new'])),
-      countWhere(collection(db, 'leads'), where('status', 'in', ['call back', 'callback', 'no answer'])),
+      countWhere(tcol('leads'), where('status', 'in', ['fresh', 'new'])),
+      countWhere(tcol('leads'), where('status', 'in', ['call back', 'callback', 'no answer'])),
       countWhere(...L('qualified')),
       countWhere(...SS('hot lead')),
       countWhere(...SS('visit customer')),

@@ -2,6 +2,7 @@
 import { getMessaging, getToken, deleteToken, onMessage, isSupported } from 'firebase/messaging';
 import { doc, updateDoc, arrayUnion } from 'firebase/firestore';
 import { app, db } from '../firebase';
+import { tcol, tdoc } from './tenant';
 
 // Firebase Console -> Project Settings -> Cloud Messaging -> Web configuration -> "Generate key pair".
 export const VAPID_KEY = 'BNJyWQ1xB3D8ZTxSBFSvywOFviUjcpBpTd2hXhJragSsGIcBa9BwTXz6IYT3s4SoHA1jOfKqdu-f41p4NRRShqM';
@@ -57,7 +58,7 @@ export async function enablePush(uid) {
   }
   if (!token) throw new Error('no-token');
 
-  await updateDoc(doc(db, 'users', uid), { fcm_tokens: arrayUnion(token) });
+  await updateDoc(tdoc('users', uid), { fcm_tokens: arrayUnion(token) });
   setLocalToken(token);
   return token;
 }

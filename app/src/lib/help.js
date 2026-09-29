@@ -7,11 +7,12 @@ import {
   query, where, orderBy, limit, serverTimestamp,
 } from 'firebase/firestore';
 import { db } from '../firebase';
+import { tcol, tdoc } from './tenant';
 
 /** Sawaal poochho (chat). `history` = prior turns [{role:'user'|'assistant', content}].
  *  Resolve hota hai jab function jawab de deta hai (ya ~65s timeout). */
 export function askAI({ question, history = [] }, user) {
-  const ref = doc(collection(db, 'help_queries'));
+  const ref = doc(tcol('help_queries'));
   const base = {
     by_uid: user.id, by_name: user.full_name || '', role: user.role || '',
     question: String(question || '').trim().slice(0, 1000),
@@ -35,12 +36,12 @@ export function askAI({ question, history = [] }, user) {
   }));
 }
 
-export const sendHelpFeedback = (queryId, helpful, note) => updateDoc(doc(db, 'help_queries', queryId), {
+export const sendHelpFeedback = (queryId, helpful, note) => updateDoc(tdoc('help_queries', queryId), {
   helpful: !!helpful, feedback_note: String(note || '').slice(0, 500), feedback_at: serverTimestamp(),
 });
 
 export async function raiseTicket({ queryId, subject, detail, aiAnswer }, user) {
-  const t = await addDoc(collection(db, 'tickets'), {
+  const t = await addDoc(tcol('tickets'), {
     by_uid: user.id, by_name: user.full_name || '', role: user.role || '',
     subject: String(subject || '').trim().slice(0, 160) || 'Help needed',
     detail: String(detail || '').trim().slice(0, 2000),
@@ -48,20 +49,20 @@ export async function raiseTicket({ queryId, subject, detail, aiAnswer }, user) 
     status: 'open', admin_note: '', handled_by: '', handled_by_name: '',
     created_at: serverTimestamp(), updated_at: serverTimestamp(),
   });
-  if (queryId) await updateDoc(doc(db, 'help_queries', queryId), { ticket_id: t.id }).catch(() => {});
+  if (queryId) await updateDoc(tdoc('help_queries', queryId), { ticket_id: t.id }).catch(() => {});
   return t.id;
 }
 
 export async function myTickets(uid, max = 50) {
   try {
     const snap = await getDocs(query(
-      collection(db, 'tickets'), where('by_uid', '==', uid), orderBy('created_at', 'desc'), limit(max),
+      tcol('tickets'), where('by_uid', '==', uid), orderBy('created_at', 'desc'), limit(max),
     ));
     return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   } catch (e) {
     // composite index abhi ban raha ho to bina orderBy — client-side sort
     if (e.code !== 'failed-precondition') throw e;
-    const snap = await getDocs(query(collection(db, 'tickets'), where('by_uid', '==', uid), limit(max)));
+    const snap = await getDocs(query(tcol('tickets'), where('by_uid', '==', uid), limit(max)));
     return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
       .sort((a, b) => (b.created_at?.seconds || 0) - (a.created_at?.seconds || 0));
   }
@@ -69,7 +70,7 @@ export async function myTickets(uid, max = 50) {
 
 export async function allTickets(status = '', max = 200) {
   const run = async (withOrder) => {
-    const parts = [collection(db, 'tickets')];
+    const parts = [tcol('tickets')];
     if (status) parts.push(where('status', '==', status));
     if (withOrder) parts.push(orderBy('created_at', 'desc'));
     parts.push(limit(max));
@@ -82,7 +83,7 @@ export async function allTickets(status = '', max = 200) {
   }
 }
 
-export const resolveTicket = (id, patch, actor) => updateDoc(doc(db, 'tickets', id), {
+export const resolveTicket = (id, patch, actor) => updateDoc(tdoc('tickets', id), {
   ...patch, handled_by: actor.uid, handled_by_name: actor.name || '',
   updated_at: serverTimestamp(),
   ...(patch.status === 'solved' ? { solved_at: serverTimestamp() } : {}),
@@ -90,7 +91,7 @@ export const resolveTicket = (id, patch, actor) => updateDoc(doc(db, 'tickets', 
 
 /* ---- Knowledge base (AI training) — admin only ---- */
 export async function kbList(max = 200) {
-  const snap = await getDocs(query(collection(db, 'help_kb'), orderBy('updated_at', 'desc'), limit(max)));
+  const snap = await getDocs(query(tcol('help_kb'), orderBy('updated_at', 'desc'), limit(max)));
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 export function kbSave(id, { q, a, tags }) {
@@ -99,26 +100,26 @@ export function kbSave(id, { q, a, tags }) {
     tags: String(tags || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).slice(0, 10),
     updated_at: serverTimestamp(),
   };
-  if (id) return updateDoc(doc(db, 'help_kb', id), data);
+  if (id) return updateDoc(tdoc('help_kb', id), data);
   // manually likhi entry = verified (admin ne khud daali)
-  return addDoc(collection(db, 'help_kb'), {
+  return addDoc(tcol('help_kb'), {
     ...data, source: 'manual', verified: true, bad: false, uses: 0, created_at: serverTimestamp(),
   });
 }
-export const kbDelete = (id) => deleteDoc(doc(db, 'help_kb', id));
+export const kbDelete = (id) => deleteDoc(tdoc('help_kb', id));
 /** Admin: AI-cached entry ko approve karo (verified) ya galat mark karo (bad -> AI use nahi karega). */
-export const kbVerify = (id, ok) => updateDoc(doc(db, 'help_kb', id), {
+export const kbVerify = (id, ok) => updateDoc(tdoc('help_kb', id), {
   verified: !!ok, bad: ok ? false : true, updated_at: serverTimestamp(),
 });
 
 /** Admin analytics — help_queries ka bounded sample + tickets counts. */
 export async function helpStats() {
   const [qSnap, tOpen, tProg, tSolved, kbSnap] = await Promise.all([
-    getDocs(query(collection(db, 'help_queries'), orderBy('created_at', 'desc'), limit(500))),
-    getDocs(query(collection(db, 'tickets'), where('status', '==', 'open'), limit(500))),
-    getDocs(query(collection(db, 'tickets'), where('status', '==', 'progress'), limit(500))),
-    getDocs(query(collection(db, 'tickets'), where('status', '==', 'solved'), limit(500))),
-    getDocs(query(collection(db, 'help_kb'), limit(500))).catch(() => ({ size: 0 })),
+    getDocs(query(tcol('help_queries'), orderBy('created_at', 'desc'), limit(500))),
+    getDocs(query(tcol('tickets'), where('status', '==', 'open'), limit(500))),
+    getDocs(query(tcol('tickets'), where('status', '==', 'progress'), limit(500))),
+    getDocs(query(tcol('tickets'), where('status', '==', 'solved'), limit(500))),
+    getDocs(query(tcol('help_kb'), limit(500))).catch(() => ({ size: 0 })),
   ]);
   const qs = qSnap.docs.map((d) => d.data());
   return {
@@ -141,7 +142,7 @@ export async function helpStats() {
  *  config/settings mein — taaki Help screen ko pata ho ki AI on hai ya nahi. */
 export async function setAiConfig({ provider, key, model }) {
   const k = String(key || '').trim();
-  await setDoc(doc(db, 'config', 'ai_secret'), {
+  await setDoc(tdoc('config', 'ai_secret'), {
     provider: provider === 'anthropic' ? 'anthropic' : 'nvidia',
     api_key: k,
     // purane naam bhi rakhe (backward compat)
@@ -149,5 +150,5 @@ export async function setAiConfig({ provider, key, model }) {
     model: String(model || '').trim() || (provider === 'anthropic' ? 'claude-haiku-4-5-20251001' : 'openai/gpt-oss-20b'),
     updated_at: serverTimestamp(),
   }, { merge: true });
-  await setDoc(doc(db, 'config', 'settings'), { ai_ready: !!k }, { merge: true });
+  await setDoc(tdoc('config', 'settings'), { ai_ready: !!k }, { merge: true });
 }

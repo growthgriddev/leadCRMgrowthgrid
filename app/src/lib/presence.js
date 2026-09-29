@@ -4,6 +4,7 @@
 // last_login set hota hai (— "kisne app kabhi khola hi nahi" ka pata isi se chalta hai).
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
+import { tcol, tdoc } from './tenant';
 
 const BEAT_MS = 120_000;
 
@@ -11,7 +12,7 @@ const BEAT_MS = 120_000;
 export function startPresence(uid) {
   if (!uid) return () => {};
   let stopped = false;
-  const ref = doc(db, 'users', uid);
+  const ref = tdoc('users', uid);
 
   const beat = () => {
     if (stopped || document.visibilityState !== 'visible') return;

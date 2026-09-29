@@ -7,8 +7,9 @@ import { fmtMoney } from '../lib/format';
 import { getCohortMonths, istDay } from '../lib/stats';
 import { sourceQuality, mecaFromActivity, ldrDownstream, companySlice } from '../lib/dashboardStats';
 import { downloadCsv } from '../lib/csv';
+import { tcol, tdoc } from '../lib/tenant';
 
-const cnt = async (...w) => (await getCountFromServer(query(collection(db, 'leads'), ...w))).data().count;
+const cnt = async (...w) => (await getCountFromServer(query(tcol('leads'), ...w))).data().count;
 const MONTH_OPTS = [3, 6, 12];
 const POS_STAGES = ['hot lead', 'visit customer', 'video call', 'visit done'];
 // asli funnel = har stage pichhle ka subset. Total -> Qualified -> Order Done.

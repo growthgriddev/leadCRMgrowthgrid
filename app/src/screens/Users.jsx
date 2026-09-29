@@ -10,6 +10,7 @@ import { friendlyError } from '../lib/errmsg';
 import Sheet from '../components/Sheet';
 import { createUser, updateUser, sendReset, transferLeads, audit } from '../lib/admin';
 import { changeUserEmail, deleteUserAccount } from '../lib/stats';
+import { tcol, tdoc } from '../lib/tenant';
 
 // md = Managing Director (business ka poora view), tl = Team Leader (team ka operational view).
 // Technical control (settings/users/builders) sirf admin ke paas rehta hai.
@@ -27,7 +28,7 @@ export default function Users() {
   const [roleFilter, setRoleFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('active');
 
-  const load = () => getDocs(collection(db, 'users')).then((s) =>
+  const load = () => getDocs(tcol('users')).then((s) =>
     setUsers(s.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''))));
   useEffect(() => { load(); }, []);
 

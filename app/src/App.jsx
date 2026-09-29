@@ -36,6 +36,7 @@ import MisReport from './screens/MisReport';
 import Reports from './screens/Reports';
 import Help from './screens/Help';
 import Tickets from './screens/Tickets';
+import { tcol, tdoc } from './lib/tenant';
 
 /* Menu — har item ek permission se juda hai (lib/permissions.js). `roleOnly` wale (ldr/sales
  * working screens) role se hi decide hote hain kyunki wo view-scope hai, permission nahi.
@@ -146,7 +147,7 @@ export default function App() {
   useEffect(() => {
     if (!user?.id || !lang) return;
     if (user.lang === lang) return;
-    updateDoc(doc(db, 'users', user.id), { lang }).catch(() => {});
+    updateDoc(tdoc('users', user.id), { lang }).catch(() => {});
   }, [user?.id, user?.lang, lang]);
 
   // Tab khuli ho tab bhi push aaye to (background SW ke bina) toast dikha do

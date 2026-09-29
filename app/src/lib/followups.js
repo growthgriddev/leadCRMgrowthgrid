@@ -6,6 +6,7 @@ import {
   collection, query, where, orderBy, limit as fbLimit, getDocs,
 } from 'firebase/firestore';
 import { db } from '../firebase';
+import { tcol, tdoc } from './tenant';
 
 const IST = '+05:30';
 const startOfToday = () => { const d = new Date(); return new Date(`${d.toISOString().slice(0, 10)}T00:00:00${IST}`); };
@@ -22,7 +23,7 @@ const SALES_INACTIVE = ['', 'qualified', 'fresh', 'new', 'order done', 'lost', '
  * @param scopeUid  role ldr/sales ho to unki uid — warna null (admin/tl = poori team)
  */
 export async function fetchFollowups({ kind, mode = 'all', from = '', to = '', scopeUid = null, cap = 900 }) {
-  const parts = [collection(db, 'leads')];
+  const parts = [tcol('leads')];
   if (scopeUid) parts.push(where(kind === 'sales' ? 'sales_uid' : 'ldr_uid', '==', scopeUid));
 
   if (from && to) {

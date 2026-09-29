@@ -8,6 +8,7 @@ import { getDailyStat, istDay, overdueByUser, sendTestPush } from '../lib/stats'
 import { updateUser } from '../lib/admin';
 import { toast } from '../toast';
 import { buildText, buildImage, shareOrSave, clockStr, dur } from '../lib/monitorReport';
+import { tcol, tdoc } from '../lib/tenant';
 
 const RELOAD_MS = 300_000; // 5 min — pehle 90s tha; screen khuli rehne par (admin din bhar) reads bachao
 const OD_CACHE_MS = 240_000;
@@ -81,7 +82,7 @@ export default function LiveMonitor() {
     if (document.visibilityState === 'hidden') return;
     setBusy(true);
     try {
-      const [usersSnap, stat] = await Promise.all([getDocs(collection(db, 'users')), getDailyStat(istDay())]);
+      const [usersSnap, stat] = await Promise.all([getDocs(tcol('users')), getDailyStat(istDay())]);
       const users = usersSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
         .filter((u) => ['sales', 'ldr'].includes(u.role) && (u.status || 'active') === 'active');
 

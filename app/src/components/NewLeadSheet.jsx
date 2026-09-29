@@ -14,6 +14,7 @@ import { friendlyError } from '../lib/errmsg';
 import Sheet from './Sheet';
 import CountryPicker from './CountryPicker';
 import { DynField } from './LeadSheet';
+import { tcol, tdoc } from '../lib/tenant';
 
 export default function NewLeadSheet({ onClose, onCreated, onOpenExisting }) {
   const { user, role } = useAuth();
@@ -54,7 +55,7 @@ export default function NewLeadSheet({ onClose, onCreated, onOpenExisting }) {
     setPCheck('checking');
     const h = setTimeout(async () => {
       try {
-        const snap = await getDoc(doc(db, 'phone_index', digits));
+        const snap = await getDoc(tdoc('phone_index', digits));
         if (!snap.exists()) { setPCheck({ exists: false }); return; }
         const ix = snap.data();
         let full = null;

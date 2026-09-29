@@ -9,8 +9,9 @@ import { db } from '../firebase';
 import { dayStart, dayEnd } from './daterange';
 import { ownedBy } from './leadStage';
 import { istDay, daysBetween } from './stats';
+import { tcol, tdoc } from './tenant';
 
-const cnt = async (...w) => (await getCountFromServer(query(collection(db, 'leads'), ...w))).data().count;
+const cnt = async (...w) => (await getCountFromServer(query(tcol('leads'), ...w))).data().count;
 
 const CACHE_TTL = 45 * 60 * 1000; // 45 min — filter badalne / dubara khulne par dobara fetch nahi (reads bachao)
 // har deploy pe dashboard cache apne aap invalid — build-time key ka hissa hai.
@@ -79,7 +80,7 @@ const SAFE_FETCH_CAP = 500; // isse zyada ho to sirf count() dikhao, poori list 
 async function safeRangeDetail(baseWhere, extraFilterFn) {
   const total = await cnt(...baseWhere);
   if (total === 0 || total > SAFE_FETCH_CAP) return { total, matched: total === 0 ? 0 : null };
-  const snap = await getDocs(query(collection(db, 'leads'), ...baseWhere));
+  const snap = await getDocs(query(tcol('leads'), ...baseWhere));
   let matched = 0;
   snap.forEach((d) => { if (extraFilterFn(d.data())) matched++; });
   return { total, matched };
@@ -132,7 +133,7 @@ async function rangeSliceUncached({ teamRole, memberUid, memberIds, from, to }) 
   const total = await cnt(...base);
   if (total === 0) return { capped: false, total: 0, byStatus: {}, bySource: {}, byState: {} };
   if (total > SAFE_FETCH_CAP) return { capped: true, total };
-  const snap = await getDocs(query(collection(db, 'leads'), ...base));
+  const snap = await getDocs(query(tcol('leads'), ...base));
   const byStatus = {}; const bySource = {}; const bySourceQ = {}; const byState = {};
   snap.forEach((d) => {
     const l = d.data();
@@ -178,7 +179,7 @@ export async function bucketStats({ teamRole, memberUid, memberIds, kind, from, 
     const total = await cnt(...base);
     if (total === 0) return { total: 0, pending: 0, worked: 0, byStatus: {}, capped: false };
     if (total > rCap) return { total, pending: null, worked: null, byStatus: null, capped: true };
-    const snap = await getDocs(query(collection(db, 'leads'), ...base, fbLimit(rCap)));
+    const snap = await getDocs(query(tcol('leads'), ...base, fbLimit(rCap)));
     let pending = 0; let rTotal = 0; const byStatus = {};
     snap.forEach((d) => {
       const l = d.data();
@@ -219,7 +220,7 @@ export async function bucketStats({ teamRole, memberUid, memberIds, kind, from, 
 export async function personalActivitySummary({ uid, from, to }) {
   return cached(`pc_persum_${uid}_${from}_${to}`, async () => {
     const snap = await getDocs(query(
-      collection(db, 'activity'),
+      tcol('activity'),
       where('uid', '==', uid),
       where('at', '>=', dayStart(from)), where('at', '<=', dayEnd(to)),
       orderBy('at', 'desc'), fbLimit(2000),
@@ -264,17 +265,17 @@ export async function workSplitStats(args) {
 
     // A: is range mein kaun si lead TOUCH hui (aur us touch mein followup-due tha ya nahi)
     const actParts = memberUid
-      ? [collection(db, 'activity'), where('uid', '==', memberUid), where('at', '>=', rs), where('at', '<=', re), orderBy('at', 'desc'), fbLimit(alim)]
-      : [collection(db, 'activity'), where('at', '>=', rs), where('at', '<=', re), orderBy('at', 'desc'), fbLimit(alim)];
+      ? [tcol('activity'), where('uid', '==', memberUid), where('at', '>=', rs), where('at', '<=', re), orderBy('at', 'desc'), fbLimit(alim)]
+      : [tcol('activity'), where('at', '>=', rs), where('at', '<=', re), orderBy('at', 'desc'), fbLimit(alim)];
     // B: kis lead ka followup IS RANGE ki date ke liye schedule hua tha. Personal view -> uid se scope
     //    (activity index: uid+scheduled_for) taaki poori team ki activity na padhni pade.
     const bParts = memberUid
-      ? [collection(db, 'activity'), where('uid', '==', memberUid), where('scheduled_for', '>=', rs), where('scheduled_for', '<=', re), orderBy('scheduled_for', 'desc'), fbLimit(blim)]
-      : [collection(db, 'activity'), where('scheduled_for', '>=', rs), where('scheduled_for', '<=', re), orderBy('scheduled_for', 'desc'), fbLimit(blim)];
+      ? [tcol('activity'), where('uid', '==', memberUid), where('scheduled_for', '>=', rs), where('scheduled_for', '<=', re), orderBy('scheduled_for', 'desc'), fbLimit(blim)]
+      : [tcol('activity'), where('scheduled_for', '>=', rs), where('scheduled_for', '<=', re), orderBy('scheduled_for', 'desc'), fbLimit(blim)];
     const [aSnap, bSnap] = await Promise.all([
       getDocs(query(...actParts)),
       getDocs(query(...bParts)).catch(async () => getDocs(query(
-        collection(db, 'activity'), where('scheduled_for', '>=', rs), where('scheduled_for', '<=', re), orderBy('scheduled_for', 'desc'), fbLimit(blim),
+        tcol('activity'), where('scheduled_for', '>=', rs), where('scheduled_for', '<=', re), orderBy('scheduled_for', 'desc'), fbLimit(blim),
       ))), // index abhi build ho raha ho to team-wide fallback
     ]);
 
@@ -301,13 +302,13 @@ export async function workSplitStats(args) {
       const chunk = allIds.slice(i, i + 30);
       try {
         // eslint-disable-next-line no-await-in-loop
-        const s = await getDocs(query(collection(db, 'leads'), where(documentId(), 'in', chunk)));
+        const s = await getDocs(query(tcol('leads'), where(documentId(), 'in', chunk)));
         s.forEach((d) => { leadMap[d.id] = { id: d.id, ...d.data() }; });
       } catch {
         // eslint-disable-next-line no-await-in-loop
         await Promise.all(chunk.map(async (id) => {
           try {
-            const one = await getDocs(query(collection(db, 'leads'), where(documentId(), '==', id)));
+            const one = await getDocs(query(tcol('leads'), where(documentId(), '==', id)));
             one.forEach((d) => { leadMap[d.id] = { id: d.id, ...d.data() }; });
           } catch { /* not readable — skip */ }
         }));
@@ -395,7 +396,7 @@ export async function getDashRange(args) {
     };
 
     // PURANE din — pre-agg `stats_daily/{date}.dash` se (1 read/din)
-    const snaps = await Promise.all(pastDays.map((d) => getDoc(doc(db, 'stats_daily', d))));
+    const snaps = await Promise.all(pastDays.map((d) => getDoc(tdoc('stats_daily', d))));
     snaps.forEach((s) => {
       if (!s.exists() || !s.data().dash) { capped = true; return; }
       const dd = s.data().dash[key];
@@ -417,7 +418,7 @@ export async function getDashRange(args) {
         if (!live) capped = true;
         else for (const bk of DASH_BK) { merge(live[bk] || {}, bk); if (live[bk] && live[bk].capped) capped = true; }
       } else {
-        const s = await getDoc(doc(db, 'stats_daily', today));
+        const s = await getDoc(tdoc('stats_daily', today));
         const dd = s.exists() && s.data().dash ? s.data().dash[key] : null;
         if (!dd) capped = true;
         else for (const bk of DASH_BK) { const src = dd[bk] || {}; if (!src.hits && !src.pids && (src.total || src.pending)) building = true; merge(src, bk); }
@@ -473,20 +474,20 @@ export async function dashDayLive({ teamRole, memberUid, memberIds }, dayStr) {
   const ALIM = memberUid ? 900 : 3000;
 
   const aParts = memberUid
-    ? [collection(db, 'activity'), where('uid', '==', memberUid), where('at', '>=', rs), where('at', '<=', re), orderBy('at', 'desc'), fbLimit(ALIM)]
-    : [collection(db, 'activity'), where('at', '>=', rs), where('at', '<=', re), orderBy('at', 'desc'), fbLimit(ALIM)];
+    ? [tcol('activity'), where('uid', '==', memberUid), where('at', '>=', rs), where('at', '<=', re), orderBy('at', 'desc'), fbLimit(ALIM)]
+    : [tcol('activity'), where('at', '>=', rs), where('at', '<=', re), orderBy('at', 'desc'), fbLimit(ALIM)];
   const bParts = memberUid
-    ? [collection(db, 'activity'), where('uid', '==', memberUid), where('scheduled_for', '>=', rs), where('scheduled_for', '<=', re), orderBy('scheduled_for', 'desc'), fbLimit(ALIM)]
-    : [collection(db, 'activity'), where('scheduled_for', '>=', rs), where('scheduled_for', '<=', re), orderBy('scheduled_for', 'desc'), fbLimit(ALIM)];
+    ? [tcol('activity'), where('uid', '==', memberUid), where('scheduled_for', '>=', rs), where('scheduled_for', '<=', re), orderBy('scheduled_for', 'desc'), fbLimit(ALIM)]
+    : [tcol('activity'), where('scheduled_for', '>=', rs), where('scheduled_for', '<=', re), orderBy('scheduled_for', 'desc'), fbLimit(ALIM)];
   const [aSnap, bSnap, freshSnap, urgentSnap] = await Promise.all([
     getDocs(query(...aParts)),
     getDocs(query(...bParts)).catch(() => ({ forEach: () => {}, size: 0 })),
-    getDocs(query(collection(db, 'leads'), ...owner, where('created_at', '>=', rs), where('created_at', '<=', re), fbLimit(1500))),
+    getDocs(query(tcol('leads'), ...owner, where('created_at', '>=', rs), where('created_at', '<=', re), fbLimit(1500))),
     // `is_urgent` kabhi wapas false nahi hota (ek baar re-inquiry hui, hamesha true rehta hai) —
     // isliye is_urgent==true se poori history mil jaati thi (Neelam jaisी purani LDR ke liye 269
     // docs, har dashboard-load par). `urgent_at` par aaj ki range se seedha query karo — sirf AAJ
     // ki re-inquiry chahiye, aur is_urgent==true hamesha implied hai (dono ek saath set hote hain).
-    getDocs(query(collection(db, 'leads'), ...owner, where('urgent_at', '>=', rs), where('urgent_at', '<=', re), fbLimit(1500))).catch(() => ({ forEach: () => {}, size: 0 })),
+    getDocs(query(tcol('leads'), ...owner, where('urgent_at', '>=', rs), where('urgent_at', '<=', re), fbLimit(1500))).catch(() => ({ forEach: () => {}, size: 0 })),
   ]);
 
   const touchCnt = {}; const dueSet = new Set();
@@ -527,7 +528,7 @@ export async function dashDayLive({ teamRole, memberUid, memberIds }, dayStr) {
     const chunk = candIds.slice(i, i + 30);
     try {
       // eslint-disable-next-line no-await-in-loop
-      const qs = await getDocs(query(collection(db, 'leads'), where(documentId(), 'in', chunk)));
+      const qs = await getDocs(query(tcol('leads'), where(documentId(), 'in', chunk)));
       qs.forEach((d) => { leadMap[d.id] = { id: d.id, ...d.data() }; });
     } catch { /* skip */ }
   }
@@ -571,7 +572,7 @@ export async function reinquiryStats({ teamRole, memberUid, memberIds }) {
   const owner = ownerScope(ownerField, memberUid, memberIds);
   const total = await cnt(...owner, where('is_urgent', '==', true));
   if (total === 0 || total > 300) return { total, pending: null, worked: null };
-  const snap = await getDocs(query(collection(db, 'leads'), ...owner, where('is_urgent', '==', true)));
+  const snap = await getDocs(query(tcol('leads'), ...owner, where('is_urgent', '==', true)));
   let pending = 0;
   snap.forEach((d) => {
     const l = d.data();
@@ -600,7 +601,7 @@ export async function overdueStats({ teamRole, memberUid, memberIds, before, wor
   const total = await cnt(...owner, where('next_followup', '<', dayStart(before)));
   // "worked in range" sirf tab client-fetch karo jab total kaabu mein ho (warna sirf total dikhao).
   if (total === 0 || total > 500) return { total, workedInRange: null, pending: null };
-  const snap = await getDocs(query(collection(db, 'leads'), ...owner, where('next_followup', '<', dayStart(before))));
+  const snap = await getDocs(query(tcol('leads'), ...owner, where('next_followup', '<', dayStart(before))));
   let workedInRange = 0;
   snap.forEach((d) => {
     const l = d.data();
@@ -618,11 +619,11 @@ export async function mecaFromActivity(from, to) {
     const CAP = 4000;
     const [snap, freshSnap] = await Promise.all([
       getDocs(query(
-        collection(db, 'activity'),
+        tcol('activity'),
         where('at', '>=', dayStart(from)), where('at', '<=', dayEnd(to)),
         orderBy('at', 'desc'), fbLimit(CAP),
       )),
-      getDocs(query(collection(db, 'leads'), where('created_at', '>=', dayStart(from)), where('created_at', '<=', dayEnd(to)), fbLimit(SAFE_FETCH_CAP + 1))),
+      getDocs(query(tcol('leads'), where('created_at', '>=', dayStart(from)), where('created_at', '<=', dayEnd(to)), fbLimit(SAFE_FETCH_CAP + 1))),
     ]);
     const freshIds = new Set();
     const freshCapped = freshSnap.size > SAFE_FETCH_CAP;
@@ -657,7 +658,7 @@ export async function mecaFromActivity(from, to) {
  *  "All time" ke liye caller count() path use kare (yeh sirf bounded range ke liye). 30-min cache. */
 export async function companySlice(from, to) {
   return cached(`pc_anaslice_${from}_${to}`, async () => {
-    const base = [collection(db, 'leads'), where('created_at', '>=', dayStart(from)), where('created_at', '<=', dayEnd(to))];
+    const base = [tcol('leads'), where('created_at', '>=', dayStart(from)), where('created_at', '<=', dayEnd(to))];
     const total = (await getCountFromServer(query(...base))).data().count;
     if (total === 0) return { total: 0, capped: false, qualified: 0, orders: 0, revenue: 0, lost: 0, positive: 0, fresh: 0, bySource: {}, bySourceQ: {} };
     if (total > 3500) return { total, capped: true };
@@ -686,7 +687,7 @@ export async function companySlice(from, to) {
  *  cap 2000) — har lead ka ldr_uid + sales_uid + sales_status se group. 30-min cache. Admin/MD only. */
 export async function ldrDownstream(userName) {
   return cached('pc_ldrdown', async () => {
-    const snap = await getDocs(query(collection(db, 'leads'), where('status', '==', 'qualified'), fbLimit(2000)));
+    const snap = await getDocs(query(tcol('leads'), where('status', '==', 'qualified'), fbLimit(2000)));
     const byLdr = {};
     snap.forEach((d) => {
       const l = d.data();
@@ -766,7 +767,7 @@ async function teamWorkloadReportUncached({ teamRole, members, from, to, resultS
   // 1 query — poori team ki range-activity ek saath (per-member nahi). worked/contacted/result
   // LIVE activity se (aaj bhi sahi rahe — pre-agg raat 1 baje banta hai).
   const actSnap = await getDocs(query(
-    collection(db, 'activity'),
+    tcol('activity'),
     where('at', '>=', dayStart(from)), where('at', '<=', dayEnd(to)),
     orderBy('at', 'desc'), fbLimit(800),
   ));

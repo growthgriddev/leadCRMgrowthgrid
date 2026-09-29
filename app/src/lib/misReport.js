@@ -8,6 +8,7 @@
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { daysBetween, istDay } from './stats';
+import { tcol, tdoc } from './tenant';
 
 // Poora saal (365) bhi ek MIS view load pe sirf 365 reads hai — is admin-only, kabhi-kabhi khulne
 // waali screen ke liye trivial cost hai (daily 50k budget ke saamne kuch bhi nahi), isliye yearly
@@ -79,7 +80,7 @@ async function misReportUncached({ teamRole, members, from, to }) {
   const U = (uid) => (perUid[uid] || (perUid[uid] = { leads: mkAcc(), followups: mkAcc() }));
   let missingDays = 0;
 
-  const snaps = await Promise.all(days.map((d) => getDoc(doc(db, 'stats_daily', d))));
+  const snaps = await Promise.all(days.map((d) => getDoc(tdoc('stats_daily', d))));
   snaps.forEach((s) => {
     if (!s.exists() || !s.data().dash) { missingDays++; return; }
     const dash = s.data().dash;

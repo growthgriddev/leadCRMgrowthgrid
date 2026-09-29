@@ -3,6 +3,7 @@ import {
   collection, query, where, orderBy, limit, getCountFromServer,
 } from 'firebase/firestore';
 import { db } from '../firebase';
+import { tcol, tdoc } from './tenant';
 
 const IST = 5.5 * 3600 * 1000;
 export function istDay(ms = Date.now()) { return new Date(ms + IST).toISOString().slice(0, 10); }
@@ -16,7 +17,7 @@ export function daysBetween(from, to) {
 
 /** ek din ka stats doc */
 export async function getDailyStat(dayStr) {
-  const s = await getDoc(doc(db, 'stats_daily', dayStr));
+  const s = await getDoc(tdoc('stats_daily', dayStr));
   return s.exists() ? s.data() : null;
 }
 
@@ -25,7 +26,7 @@ export async function getDailyStat(dayStr) {
  *  nikalta tha — 1,650+ reads per load. Bhaari hisaab raat mein ek baar server par ho jaata hai. */
 export async function getRangeStats(fromDay, toDay, team = 'all') {
   const days = daysBetween(fromDay, toDay);
-  const snaps = await Promise.all(days.map((d) => getDoc(doc(db, 'stats_daily', d))));
+  const snaps = await Promise.all(days.map((d) => getDoc(tdoc('stats_daily', d))));
   const byUser = {};
   const totals = { calls: 0, qualified: 0, closed: 0, revenue: 0, lost: 0, fresh_created: 0 };
   const reports = {
@@ -74,22 +75,22 @@ export async function getRangeStats(fromDay, toDay, team = 'all') {
 }
 
 export async function getCohortMonths(nMonths = 6) {
-  const snap = await getDocs(query(collection(db, 'stats_cohort'), orderBy('month', 'desc'), limit(nMonths)));
+  const snap = await getDocs(query(tcol('stats_cohort'), orderBy('month', 'desc'), limit(nMonths)));
   return snap.docs.map((d) => d.data()).reverse();
 }
 
 export async function getLatestWeekly() {
-  const snap = await getDocs(query(collection(db, 'reports_weekly'), orderBy('week_start', 'desc'), limit(1)));
+  const snap = await getDocs(query(tcol('reports_weekly'), orderBy('week_start', 'desc'), limit(1)));
   return snap.empty ? null : snap.docs[0].data();
 }
 export async function listWeekly(n = 60) {
-  const snap = await getDocs(query(collection(db, 'reports_weekly'), orderBy('week_start', 'desc'), limit(n)));
+  const snap = await getDocs(query(tcol('reports_weekly'), orderBy('week_start', 'desc'), limit(n)));
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
 /** live count — kisi query ka */
 export async function countWhere(colName, wheres) {
-  let q = collection(db, colName);
+  let q = tcol(colName);
   q = query(q, ...wheres);
   const s = await getCountFromServer(q);
   return s.data().count;
@@ -98,7 +99,7 @@ export async function countWhere(colName, wheres) {
 /** admin task doc likho + result ka wait karo (Cloud Function trigger karta hai).
  *  onProgress({done,total}) live update deta hai. */
 function runAdminTask(id, extra = {}, onProgress, timeoutMs = 540000) {
-  const ref = doc(db, 'admin_tasks', id);
+  const ref = tdoc('admin_tasks', id);
   return setDoc(ref, { ...extra, status: 'pending', progress: null, result: null, error: null, requested_at: serverTimestamp() })
     .then(() => new Promise((resolve, reject) => {
       const started = Date.now();

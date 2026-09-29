@@ -10,6 +10,7 @@ import {
 import { db, auth } from '../firebase';
 import { computeScore } from './scoring';
 import { revDigits } from './leads';
+import { tcol, tdoc } from './tenant';
 
 // TODO(Phase 3): fixed temp password hatakar har user ke liye random password (username login ke saath)
 const TEMP_PASSWORD = 'Temp@12345';
@@ -27,7 +28,7 @@ function secondaryAuth() {
 export async function audit(actor, action, target, changes = [], extra = {}) {
   try {
     if (Array.isArray(changes) && changes.length === 0 && !extra.note) return; // no-op, skip
-    await addDoc(collection(db, 'audit'), {
+    await addDoc(tcol('audit'), {
       at: serverTimestamp(),
       uid: actor.uid, actor_name: actor.name || '',
       action, target,
@@ -50,7 +51,7 @@ export function diff(oldObj = {}, newObj = {}, keys) {
 }
 
 export async function fetchAudit({ cursor = null, pageSize = 40, from = null, to = null }) {
-  const parts = [collection(db, 'audit')];
+  const parts = [tcol('audit')];
   if (from) parts.push(where('at', '>=', from));
   if (to) parts.push(where('at', '<=', to));
   parts.push(orderBy('at', 'desc'));
@@ -69,7 +70,7 @@ export async function createUser({ full_name, email, phone, role, team = '' }, a
   const sAuth = secondaryAuth();
   const cred = await createUserWithEmailAndPassword(sAuth, email.trim().toLowerCase(), TEMP_PASSWORD);
   const uid = cred.user.uid;
-  await setDoc(doc(db, 'users', uid), {
+  await setDoc(tdoc('users', uid), {
     legacy_id: '', full_name, email: email.trim().toLowerCase(), phone: phone || '', role,
     team: role === 'tl' ? team : '',
     status: 'active', attendance: 'Present',
@@ -84,7 +85,7 @@ export async function createUser({ full_name, email, phone, role, team = '' }, a
 export async function updateUser(uid, patch, oldUser, actor) {
   const changes = diff(oldUser, { ...oldUser, ...patch }, Object.keys(patch));
   if (changes.length === 0) return;
-  await updateDoc(doc(db, 'users', uid), patch);
+  await updateDoc(tdoc('users', uid), patch);
   await audit(actor, 'user.update', oldUser?.full_name || uid, changes);
 }
 
@@ -100,7 +101,7 @@ export async function transferLeads(fromUid, toUid, actor) {
     let last = null;
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      const parts = [collection(db, 'leads'), where(field, '==', fromUid), orderBy(documentId()), limit(400)];
+      const parts = [tcol('leads'), where(field, '==', fromUid), orderBy(documentId()), limit(400)];
       if (last) parts.push(startAfter(last));
       const snap = await getDocs(query(...parts));
       if (snap.empty) break;
@@ -120,14 +121,14 @@ export async function transferLeads(fromUid, toUid, actor) {
 export async function saveSettings(newObj, oldObj, actor) {
   const changes = diff(oldObj, newObj);
   if (changes.length === 0) return;
-  await setDoc(doc(db, 'config', 'settings'), newObj, { merge: true });
+  await setDoc(tdoc('config', 'settings'), newObj, { merge: true });
   await audit(actor, 'settings.save', 'Settings', changes);
 }
 
 /** config/access — kaunsa role kaunsa menu-item aur kaunsa dashboard-variant dekhega.
  *  Ye SIRF visibility hai — asli security (kaun kya kar sakta hai) Firestore rules mein fixed hai. */
 export async function saveAccess(access, actor) {
-  await setDoc(doc(db, 'config', 'access'), access, { merge: true });
+  await setDoc(tdoc('config', 'access'), access, { merge: true });
   await audit(actor, 'settings.access', 'Access Control', [{ field: 'menu', from: '', to: 'updated' }]);
 }
 
@@ -136,7 +137,7 @@ export async function saveAccess(access, actor) {
  *  days = kisi khaas din ka actual/override (band-wale din ke liye 0, ya Excel import se).
  *  Report inhi se cost-per-lead nikalta hai. */
 export async function saveAdSpend(patch, actor) {
-  await setDoc(doc(db, 'config', 'ad_spend'), patch, { merge: true });
+  await setDoc(tdoc('config', 'ad_spend'), patch, { merge: true });
   await audit(actor, 'settings.adspend', 'Ad Spend', [{ field: Object.keys(patch).join(','), from: '', to: 'updated' }]);
 }
 
@@ -149,9 +150,9 @@ export async function saveMailConfig({ email, appPassword }, actor) {
   const patch = {};
   if (email != null) patch.Report_Email = email;
   if (appPassword) patch.mail_password_set = true;
-  if (Object.keys(patch).length) await setDoc(doc(db, 'config', 'settings'), patch, { merge: true });
+  if (Object.keys(patch).length) await setDoc(tdoc('config', 'settings'), patch, { merge: true });
   if (appPassword) {
-    await setDoc(doc(db, 'config', 'mail_secret'), { app_password: appPassword, updated_at: serverTimestamp() });
+    await setDoc(tdoc('config', 'mail_secret'), { app_password: appPassword, updated_at: serverTimestamp() });
   }
   await audit(actor, 'settings.mail', 'Email settings', [
     ...(email != null ? [{ field: 'Report_Email', from: '', to: email }] : []),
@@ -173,45 +174,45 @@ function listDiff(oldList, newList, key) {
 }
 
 export async function saveFormFields(fields, actor) {
-  const prev = (await getDoc(doc(db, 'config', 'forms'))).data()?.fields || [];
-  await setDoc(doc(db, 'config', 'forms'), { fields });
+  const prev = (await getDoc(tdoc('config', 'forms'))).data()?.fields || [];
+  await setDoc(tdoc('config', 'forms'), { fields });
   await audit(actor, 'config.forms', 'Form Fields', listDiff(prev, fields, 'label'));
 }
 
 export async function saveStages(stages, actor) {
-  const prev = (await getDoc(doc(db, 'config', 'stages'))).data()?.stages || [];
-  await setDoc(doc(db, 'config', 'stages'), { stages });
+  const prev = (await getDoc(tdoc('config', 'stages'))).data()?.stages || [];
+  await setDoc(tdoc('config', 'stages'), { stages });
   await audit(actor, 'config.stages', 'Pipeline Stages', listDiff(prev, stages, 'name'));
 }
 
 /* ---------- RECYCLE ---------- */
 export async function softDeleteLead(lead, actor) {
   const b = writeBatch(db);
-  b.set(doc(db, 'recycle', lead.id), {
+  b.set(tdoc('recycle', lead.id), {
     kind: 'lead', data: lead, deleted_at: serverTimestamp(), deleted_by: actor.uid, deleted_by_name: actor.name || '',
   });
-  b.delete(doc(db, 'leads', lead.id));
+  b.delete(tdoc('leads', lead.id));
   // phone_index bhi saaf karo — warna delete ke baad bhi wo number "already exists" dikhata rahega
   // (stale index kisi aisi lead ki taraf ishaara karta jo ab hai hi nahi).
   if (lead.phone_digits) {
-    const idx = await getDoc(doc(db, 'phone_index', lead.phone_digits));
-    if (idx.exists() && idx.data().lead_id === lead.id) b.delete(doc(db, 'phone_index', lead.phone_digits));
+    const idx = await getDoc(tdoc('phone_index', lead.phone_digits));
+    if (idx.exists() && idx.data().lead_id === lead.id) b.delete(tdoc('phone_index', lead.phone_digits));
   }
   await b.commit();
   await audit(actor, 'lead.delete', lead.name || `#${lead.id}`, [], { note: lead.phone || lead.phone_raw || '' });
 }
 
 export async function restoreLead(recycleId, actor) {
-  const snap = await getDoc(doc(db, 'recycle', recycleId));
+  const snap = await getDoc(tdoc('recycle', recycleId));
   if (!snap.exists()) throw new Error('not-found');
   const { data } = snap.data();
   const b = writeBatch(db);
   const { id, ...rest } = data;
-  b.set(doc(db, 'leads', id), { ...rest, updated_at: serverTimestamp(), restored_at: serverTimestamp() });
-  b.delete(doc(db, 'recycle', recycleId));
+  b.set(tdoc('leads', id), { ...rest, updated_at: serverTimestamp(), restored_at: serverTimestamp() });
+  b.delete(tdoc('recycle', recycleId));
   // phone_index wapas is lead ki taraf point karo (delete ke waqt hataya tha)
   if (rest.phone_digits) {
-    b.set(doc(db, 'phone_index', rest.phone_digits), {
+    b.set(tdoc('phone_index', rest.phone_digits), {
       lead_id: id, name: rest.name || '', phone: rest.phone || rest.phone_raw || '',
       owner_name: rest.sales_name || rest.ldr_name || '', stage: rest.sales_status || rest.status || '',
       source: rest.source || '', updated_at: serverTimestamp(),
@@ -222,7 +223,7 @@ export async function restoreLead(recycleId, actor) {
 }
 
 export async function fetchRecycle() {
-  const snap = await getDocs(query(collection(db, 'recycle'), orderBy('deleted_at', 'desc'), limit(100)));
+  const snap = await getDocs(query(tcol('recycle'), orderBy('deleted_at', 'desc'), limit(100)));
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
@@ -233,7 +234,7 @@ export async function bulkArchive(leadIds, archived, actor) {
     : { archived: false, archived_at: null, updated_at: serverTimestamp() };
   for (let i = 0; i < leadIds.length; i += 400) {
     const b = writeBatch(db);
-    leadIds.slice(i, i + 400).forEach((id) => b.update(doc(db, 'leads', id), upd));
+    leadIds.slice(i, i + 400).forEach((id) => b.update(tdoc('leads', id), upd));
     await b.commit();
   }
   await audit(actor, archived ? 'leads.archive' : 'leads.unarchive', '', [], { note: `${leadIds.length} leads` });
@@ -245,7 +246,7 @@ export async function bulkAssign(leadIds, { ldr_uid, sales_uid }, names, actor) 
   if (sales_uid) { patch.sales_uid = sales_uid; patch.sales_name = names.sales || ''; }
   for (let i = 0; i < leadIds.length; i += 400) {
     const b = writeBatch(db);
-    leadIds.slice(i, i + 400).forEach((id) => b.update(doc(db, 'leads', id), patch));
+    leadIds.slice(i, i + 400).forEach((id) => b.update(tdoc('leads', id), patch));
     await b.commit();
   }
   await audit(actor, 'leads.bulk_assign', '', [], {
@@ -259,7 +260,7 @@ export async function checkExistingPhones(digitsArr) {
   const seen = new Set();
   for (let i = 0; i < uniq.length; i += 30) {
     const chunk = uniq.slice(i, i + 30);
-    const snap = await getDocs(query(collection(db, 'leads'), where('phone_digits', 'in', chunk)));
+    const snap = await getDocs(query(tcol('leads'), where('phone_digits', 'in', chunk)));
     snap.forEach((d) => seen.add(d.data().phone_digits));
   }
   return seen;
@@ -271,7 +272,7 @@ export async function checkExistingPhones(digitsArr) {
  * `rows` sirf valid + non-duplicate hone chahiye. Return: { added, byLdr:{name:count} }.
  */
 export async function importLeads(rows, actor, onProgress) {
-  const metaRef = doc(db, 'meta', 'counters');
+  const metaRef = tdoc('meta', 'counters');
   const metaSnap = await getDoc(metaRef);
   let nextId = (metaSnap.exists() ? metaSnap.data().leads || 0 : 0) + 1;
 
@@ -298,7 +299,7 @@ export async function importLeads(rows, actor, onProgress) {
       };
       const sc = computeScore(lead);
       lead.score = sc.score; lead.tier = sc.tier;
-      b.set(doc(db, 'leads', id), lead);
+      b.set(tdoc('leads', id), lead);
       const key = r._ldr_name || '—';
       byLdr[key] = (byLdr[key] || 0) + 1;
       added++;
@@ -329,7 +330,7 @@ export async function scanDuplicates(onProgress) {
   let scanned = 0;
   for (;;) {
     const parts = [
-      collection(db, 'leads'), orderBy('phone_digits'),
+      tcol('leads'), orderBy('phone_digits'),
       ...(cursor ? [startAfter(cursor)] : []), limit(500),
     ];
     const snap = await getDocs(query(...parts));
@@ -361,7 +362,7 @@ export async function scanDuplicates(onProgress) {
  * hi rehti hai — canonical ki timeline mein ek "merged" note likh dete hain.
  */
 export async function mergeLead(canonical, duplicate, actor) {
-  const ordersSnap = await getDocs(query(collection(db, 'orders'), where('lead_id', '==', duplicate.id)));
+  const ordersSnap = await getDocs(query(tcol('orders'), where('lead_id', '==', duplicate.id)));
   let movedRevenue = 0;
   const orderDocs = ordersSnap.docs;
   for (let i = 0; i < orderDocs.length; i += 400) {
@@ -376,29 +377,29 @@ export async function mergeLead(canonical, duplicate, actor) {
 
   const batch = writeBatch(db);
   if (movedCount > 0) {
-    batch.update(doc(db, 'leads', canonical.id), {
+    batch.update(tdoc('leads', canonical.id), {
       order_count: increment(movedCount), total_revenue: increment(movedRevenue),
       outcome: 'customer', updated_at: serverTimestamp(),
     });
   }
   if (canonical.phone_digits) {
-    batch.set(doc(db, 'phone_index', canonical.phone_digits), {
+    batch.set(tdoc('phone_index', canonical.phone_digits), {
       lead_id: canonical.id, name: canonical.name || '', phone: canonical.phone || canonical.phone_raw || '',
       owner_name: canonical.sales_name || canonical.ldr_name || '', stage: canonical.sales_status || canonical.status || '',
     }, { merge: true });
   }
-  batch.set(doc(collection(db, 'activity')), {
+  batch.set(doc(tcol('activity')), {
     lead_id: canonical.id, lead_name: canonical.name || '', at: serverTimestamp(),
     uid: actor.uid, actor_name: actor.name || '', action: 'merge',
     from_status: '', to_status: '', amount: movedRevenue, channel: 'app',
     remark: `Merged duplicate #${duplicate.id} (${duplicate.name || 'no name'}, ${duplicate.phone || duplicate.phone_raw || ''}) — ${movedCount} order(s) moved.`.slice(0, 500),
   });
-  batch.set(doc(db, 'recycle', duplicate.id), {
+  batch.set(tdoc('recycle', duplicate.id), {
     kind: 'lead', data: { ...duplicate, dup_merged_into: canonical.id },
     deleted_at: serverTimestamp(), deleted_by: actor.uid, deleted_by_name: actor.name || '',
   });
-  batch.delete(doc(db, 'leads', duplicate.id));
-  batch.set(doc(collection(db, 'audit')), {
+  batch.delete(tdoc('leads', duplicate.id));
+  batch.set(doc(tcol('audit')), {
     at: serverTimestamp(), uid: actor.uid, actor_name: actor.name || '',
     action: 'lead.merge', target: canonical.name || `#${canonical.id}`,
     changes: [{ field: 'merged_duplicate', from: `#${duplicate.id}`, to: canonical.name || `#${canonical.id}` }],

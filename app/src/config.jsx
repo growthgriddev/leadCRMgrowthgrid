@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
 import { doc, getDoc, collection, getDocs } from 'firebase/firestore';
 import { db } from './firebase';
 import { useAuth } from './auth';
+import { tcol, tdoc } from './lib/tenant';
 
 const ConfigCtx = createContext(null);
 export const useConfig = () => useContext(ConfigCtx);
@@ -17,12 +18,12 @@ export function ConfigProvider({ children }) {
     (async () => {
       try {
         const [stagesS, formsS, setS, accessS, adS, usersS] = await Promise.all([
-          getDoc(doc(db, 'config', 'stages')),
-          getDoc(doc(db, 'config', 'forms')),
-          getDoc(doc(db, 'config', 'settings')),
-          getDoc(doc(db, 'config', 'access')),
-          getDoc(doc(db, 'config', 'ad_spend')).catch(() => null), // ldr/sales ko read allowed nahi
-          getDocs(collection(db, 'users')),
+          getDoc(tdoc('config', 'stages')),
+          getDoc(tdoc('config', 'forms')),
+          getDoc(tdoc('config', 'settings')),
+          getDoc(tdoc('config', 'access')),
+          getDoc(tdoc('config', 'ad_spend')).catch(() => null), // ldr/sales ko read allowed nahi
+          getDocs(tcol('users')),
         ]);
         if (!alive) return;
         setCfg({

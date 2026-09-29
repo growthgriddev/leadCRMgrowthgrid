@@ -7,6 +7,7 @@ import {
 import { db } from '../firebase';
 import { normalizePhone } from './phone';
 import { computeScore } from './scoring';
+import { tcol, tdoc } from './tenant';
 
 const FLAT_FIELDS = {
   f_customer_type: 'Customer Type', f_bulk: 'Bulk Requirement?', f_intent: 'Buying Intent',
@@ -32,7 +33,7 @@ export async function createLead(d, actor, role) {
   if (!ph.digits || ph.digits.replace(/\D/g, '').length < 8) throw new Error('bad-phone');
 
   // duplicate check — phone_index/{digits} ek doc GET (har role padh sakta hai; display info yahi doc me hai)
-  const idxSnap = await getDoc(doc(db, 'phone_index', ph.digits));
+  const idxSnap = await getDoc(tdoc('phone_index', ph.digits));
   if (idxSnap.exists()) {
     const ix = idxSnap.data();
     let full = null;
@@ -48,7 +49,7 @@ export async function createLead(d, actor, role) {
   }
 
   // next sequential id — transaction (offline cache pe fail ho to auto-id fallback)
-  const metaRef = doc(db, 'meta', 'counters');
+  const metaRef = tdoc('meta', 'counters');
   let id;
   try {
     id = await runTransaction(db, async (tx) => {
@@ -59,7 +60,7 @@ export async function createLead(d, actor, role) {
     });
   } catch (txErr) {
     console.warn('id transaction failed, using auto-id', txErr);
-    id = doc(collection(db, 'leads')).id;
+    id = doc(tcol('leads')).id;
   }
 
   const isSales = role === 'sales';
@@ -99,13 +100,13 @@ export async function createLead(d, actor, role) {
   lead.score = sc.score; lead.tier = sc.tier;
 
   const batch = writeBatch(db);
-  batch.set(doc(db, 'leads', id), lead);
-  batch.set(doc(db, 'phone_index', ph.digits), {
+  batch.set(tdoc('leads', id), lead);
+  batch.set(tdoc('phone_index', ph.digits), {
     lead_id: id, name: lead.name, phone: lead.phone || lead.phone_raw,
     owner_name: lead.sales_name || lead.ldr_name || '', stage: lead.sales_status || lead.status,
     source: lead.source, updated_at: serverTimestamp(),
   });
-  batch.set(doc(collection(db, 'activity')), {
+  batch.set(doc(tcol('activity')), {
     lead_id: id, lead_name: lead.name, at: serverTimestamp(),
     uid: actor.uid, actor_name: actor.name || '', action: 'created',
     from_status: '', to_status: lead.status,
@@ -121,7 +122,7 @@ export async function createLead(d, actor, role) {
 /** Archived lead ka number dobara aaya — usi record par NAYA form bhardo (fresh lead jaisa),
  *  un-archive + re-inquiry mark. Purani history rehti hai, uspe nayi activity add hoti hai. */
 export async function reopenArchivedLead(leadId, d, actor, role) {
-  const snap = await getDoc(doc(db, 'leads', leadId));
+  const snap = await getDoc(tdoc('leads', leadId));
   if (!snap.exists()) throw new Error('not-found');
   const prev = { id: leadId, ...snap.data() };
   const now = serverTimestamp();
@@ -165,15 +166,15 @@ export async function reopenArchivedLead(leadId, d, actor, role) {
   upd.score = sc.score; upd.tier = sc.tier;
 
   const batch = writeBatch(db);
-  batch.update(doc(db, 'leads', leadId), upd);
+  batch.update(tdoc('leads', leadId), upd);
   if (prev.phone_digits) {
-    batch.set(doc(db, 'phone_index', prev.phone_digits), {
+    batch.set(tdoc('phone_index', prev.phone_digits), {
       lead_id: leadId, name: upd.name, phone: prev.phone || prev.phone_raw || '',
       owner_name: upd.sales_name || upd.ldr_name || '', stage: upd.sales_status || upd.status,
       source: upd.source, updated_at: now,
     }, { merge: true });
   }
-  batch.set(doc(collection(db, 'activity')), {
+  batch.set(doc(tcol('activity')), {
     lead_id: leadId, lead_name: upd.name, at: now,
     uid: actor.uid, actor_name: actor.name || '', action: 'created',
     from_status: 'archived', to_status: upd.status,
@@ -332,7 +333,7 @@ export async function fetchLeadsPage({ role, uid, view = 'all', filters = null, 
   if (!archivedView) post.push((l) => !l.archived);
   const over = post.length ? 4 : 1;
   const parts = [
-    collection(db, 'leads'),
+    tcol('leads'),
     ...(archivedView ? [] : scopeConstraints({ role, uid, view })),
     ...extra,
     ...(cursor ? [startAfter(cursor)] : []),
@@ -361,7 +362,7 @@ export async function countLeads({ role, uid, view = 'all' }) {
   // 'fresh' pool = status fresh/new (har role ke liye same, scope nahi lagta — pool shared hai)
   else if (view === 'fresh') filters.push(where('status', 'in', ['fresh', 'new']));
   const parts = [
-    collection(db, 'leads'),
+    tcol('leads'),
     ...scopeConstraints({ role, uid, view }),
     ...filters,
   ];
@@ -393,7 +394,7 @@ export async function fetchLeadsAll({ role, uid, view, cap = 2000, force = false
 
   const vparts = (VIEW_ALL_PARTS[view] || (() => []))();
   const parts = [
-    collection(db, 'leads'),
+    tcol('leads'),
     ...scopeConstraints({ role, uid, view }),
     ...vparts,
     limit(cap + 1),
@@ -422,7 +423,7 @@ export async function fetchLeadsForFilter({ role, uid, filters, cap = 6000 }) {
   if (!r.archivedView) post.push((l) => !l.archived);
   if (role === 'ldr' && !r.archivedView) post.push((l) => String(l.status || '').toLowerCase() !== 'qualified' && !String(l.sales_status || '').trim());
   const parts = [
-    collection(db, 'leads'),
+    tcol('leads'),
     ...(r.archivedView ? [] : scopeConstraints({ role, uid, view: 'all' })),
     ...r.parts,
     limit(Math.min(cap + 1, 10000)),
@@ -434,7 +435,7 @@ export async function fetchLeadsForFilter({ role, uid, filters, cap = 6000 }) {
 }
 
 export async function getLead(id) {
-  const snap = await getDoc(doc(db, 'leads', id));
+  const snap = await getDoc(tdoc('leads', id));
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 }
 
@@ -453,7 +454,7 @@ export async function leadStatusCounts({ role, uid, team = '', member = '', forc
 
   const scope = scopeConstraints({ role, uid, view: 'all' });
   const memberW = member ? [where(team === 'sales' ? 'sales_uid' : 'ldr_uid', '==', member)] : [];
-  const base = [collection(db, 'leads'), ...scope, ...memberW];
+  const base = [tcol('leads'), ...scope, ...memberW];
   const c = (w) => getCountFromServer(query(...base, ...w)).then((r) => r.data().count).catch(() => 0);
 
   // LDR user ko sirf apna kaam (fresh/call back/lost); Sales user ko sirf sales stages.
@@ -506,7 +507,7 @@ function searchScope({ role, uid }) {
 async function prefixQuery(scope, field, prefix, max) {
   if (!prefix) return [];
   const parts = [
-    collection(db, 'leads'), ...scope,
+    tcol('leads'), ...scope,
     where(field, '>=', prefix), where(field, '<', prefix + ''),
     limit(max),
   ];
@@ -549,7 +550,7 @@ export async function updateLeadInfo(lead, patch, actor) {
   if (patch.phone != null) {
     const ph = normalizePhone(patch.phone);
     if (ph.digits && ph.digits !== lead.phone_digits) {
-      const idx = await getDoc(doc(db, 'phone_index', ph.digits));
+      const idx = await getDoc(tdoc('phone_index', ph.digits));
       if (idx.exists() && idx.data().lead_id !== lead.id) throw new Error('dup-phone');
       clean.phone = ph.valid ? ph.formatted : '';
       clean.phone_digits = ph.digits;
@@ -565,16 +566,16 @@ export async function updateLeadInfo(lead, patch, actor) {
   if ('company' in clean) clean.company_lower = String(clean.company).toLowerCase();
 
   const batch = writeBatch(db);
-  batch.update(doc(db, 'leads', lead.id), clean);
+  batch.update(tdoc('leads', lead.id), clean);
   if (newDigits) {
-    batch.set(doc(db, 'phone_index', newDigits), {
+    batch.set(tdoc('phone_index', newDigits), {
       lead_id: lead.id, name: clean.name ?? lead.name ?? '', phone: clean.phone,
       owner_name: lead.sales_name || lead.ldr_name || '', stage: lead.sales_status || lead.status || '',
       source: clean.source ?? lead.source ?? '', updated_at: serverTimestamp(),
     });
-    if (lead.phone_digits) batch.delete(doc(db, 'phone_index', lead.phone_digits));
+    if (lead.phone_digits) batch.delete(tdoc('phone_index', lead.phone_digits));
   }
-  batch.set(doc(collection(db, 'audit')), {
+  batch.set(doc(tcol('audit')), {
     at: serverTimestamp(), uid: actor.uid, actor_name: actor.name || '',
     action: 'lead.edit', target: lead.name || `#${lead.id}`, changes,
   });

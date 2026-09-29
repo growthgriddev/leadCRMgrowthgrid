@@ -7,6 +7,7 @@ import { useT, fill } from '../i18n';
 import { toast } from '../toast';
 import { saveFormFields, saveStages } from '../lib/admin';
 import { DynField } from '../components/LeadSheet';
+import { tcol, tdoc } from '../lib/tenant';
 
 const uid = () => Math.random().toString(36).slice(2, 8);
 const FIELD_TYPES = ['text', 'textarea', 'number', 'dropdown', 'multiselect', 'checkbox', 'date', 'phone', 'email', 'url'];
@@ -126,7 +127,7 @@ function FormBuilder({ actor, t }) {
   const [pvVals, setPvVals] = useState({}); // preview mein form fill karke dekh sako
 
   useEffect(() => {
-    getDoc(doc(db, 'config', 'forms')).then((s) => setFields((s.data()?.fields || []).map((f) => ({
+    getDoc(tdoc('config', 'forms')).then((s) => setFields((s.data()?.fields || []).map((f) => ({
       id: f.id || uid(), label: f.label || '', type: f.type || 'text',
       role_view: f.role_view || 'both', role_edit: f.role_edit || 'both',
       status: f.status || 'active', is_mandatory: f.is_mandatory === 'Yes' ? 'Yes' : 'No',
@@ -264,7 +265,7 @@ function StageBuilder({ actor, t }) {
   const [pvStage, setPvStage] = useState('');
 
   useEffect(() => {
-    getDoc(doc(db, 'config', 'stages')).then((s) => setStages((s.data()?.stages || []).map((x) => ({
+    getDoc(tdoc('config', 'stages')).then((s) => setStages((s.data()?.stages || []).map((x) => ({
       id: x.id || uid(), name: x.name || '', role: x.role || 'sales',
       requires_date: x.requires_date === 'No' ? 'No' : 'Yes', color: x.color || '#0074d9',
       shows_form: x.shows_form === 'Yes' || String(x.name || '').toLowerCase() === 'qualified' ? 'Yes' : 'No',

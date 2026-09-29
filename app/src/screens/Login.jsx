@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { signInWithEmailAndPassword, updatePassword, signOut } from 'firebase/auth';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { toLoginEmail, cleanSlug, slugFromPath } from '../lib/loginId';
 import { auth, db } from '../firebase';
 import { useAuth } from '../auth';
 import { useT, LANGS } from '../i18n';
+import { tcol, tdoc } from '../lib/tenant';
 
 const MSG = {
   'auth/invalid-credential': { en: 'Wrong email or password.', hi: 'ईमेल या पासवर्ड ग़लत है।', hinglish: 'Email ya password galat hai.' },
@@ -16,7 +18,9 @@ const MSG = {
 export default function Login() {
   const { fbUser, user } = useAuth();
   const { t, lang, setLang } = useT();
-  const [email, setEmail] = useState('');
+  const [slug, setSlug] = useState(slugFromPath());
+  const [company, setCompany] = useState(null); // tenant_slugs/{slug}: naam/logo (public doc)
+  const [username, setUsername] = useState('');
   const [pass, setPass] = useState('');
   const [np1, setNp1] = useState('');
   const [np2, setNp2] = useState('');
@@ -26,11 +30,22 @@ export default function Login() {
   const mustReset = fbUser && user && user.must_reset_password;
   const em = (code, fb) => (MSG[code] && (MSG[code][lang] || MSG[code].en)) || fb;
 
+  // company ka naam dikhane ke liye (public doc; na mile to bhi login try ho sakta hai)
+  useEffect(() => {
+    const sl = cleanSlug(slug);
+    if (!sl) { setCompany(null); return undefined; }
+    let alive = true;
+    getDoc(doc(db, 'tenant_slugs', sl)).then((d) => { if (alive) setCompany(d.exists() ? d.data() : false); }).catch(() => {});
+    return () => { alive = false; };
+  }, [slug]);
+
   async function doLogin(e) {
     e.preventDefault();
     setErr(''); setBusy(true);
     try {
-      await signInWithEmailAndPassword(auth, email.trim(), pass);
+      const sl = cleanSlug(slug);
+      if (!sl) { setErr('Company code daalo.'); return; }
+      await signInWithEmailAndPassword(auth, toLoginEmail(username, sl), pass);
     } catch (e2) {
       setErr(em(e2.code, 'Login failed. Try again.'));
     } finally { setBusy(false); }
@@ -44,7 +59,7 @@ export default function Login() {
     setBusy(true);
     try {
       await updatePassword(auth.currentUser, np1);
-      await updateDoc(doc(db, 'users', auth.currentUser.uid), { must_reset_password: false });
+      await updateDoc(tdoc('users', auth.currentUser.uid), { must_reset_password: false });
     } catch (e2) {
       if (e2.code === 'auth/requires-recent-login') { setErr(t('firstLogin')); await signOut(auth); }
       else setErr(em(e2.code, 'Could not set password.'));
@@ -55,17 +70,25 @@ export default function Login() {
     <div className="login-wrap">
       <div className="login-box">
         <div className="login-logo"><i className="fas fa-gem" /></div>
-        <h1>{t('appName')}</h1>
+        <h1>{company?.name || t('appName')}</h1>
         <p className="sub">{mustReset ? t('resetSub') : t('loginSub')}</p>
 
         {err && <div className="alert alert-error">{err}</div>}
 
         {!mustReset ? (
           <form onSubmit={doLogin}>
+            {!slugFromPath() && (
+              <div className="form-group">
+                <label>Company code</label>
+                <input className="form-control" autoCapitalize="none" required
+                  value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="company-code" />
+                {company === false && <small style={{ color: '#c00' }}>Company nahi mili</small>}
+              </div>
+            )}
             <div className="form-group">
-              <label>{t('email')}</label>
-              <input className="form-control" type="email" autoComplete="username" inputMode="email" required
-                value={email} onChange={(e) => setEmail(e.target.value)} placeholder="aap@example.com" />
+              <label>Username</label>
+              <input className="form-control" autoComplete="username" autoCapitalize="none" required
+                value={username} onChange={(e) => setUsername(e.target.value)} placeholder="username" />
             </div>
             <div className="form-group">
               <label>{t('password')}</label>

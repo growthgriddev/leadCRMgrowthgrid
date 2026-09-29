@@ -12,6 +12,7 @@ import { downloadCsv } from '../lib/csv';
 import { fmtDate, fmtStatus, isPast } from '../lib/format';
 import { healthOverview, healthByPerson, fetchHealthLeads, bustHealthCache, HEALTH_CHECKS } from '../lib/dataHealth';
 import LeadSheet from '../components/LeadSheet';
+import { tcol, tdoc } from '../lib/tenant';
 
 const PER = 20;
 
@@ -302,7 +303,7 @@ function DupFinder() {
       await Promise.all(found.map(async (g) => {
         let canonicalId = null;
         try {
-          const idx = await getDoc(doc(db, 'phone_index', g.digits));
+          const idx = await getDoc(tdoc('phone_index', g.digits));
           if (idx.exists() && g.leads.some((l) => l.id === idx.data().lead_id)) canonicalId = idx.data().lead_id;
         } catch { /* ignore */ }
         if (!canonicalId) {

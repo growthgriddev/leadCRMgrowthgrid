@@ -1,0 +1,7 @@
+{
+  "name": "growthgrid-saas",
+  "private": true,
+  "scripts": {
+    "test:rules": "firebase emulators:exec --only firestore --project demo-growthgrid \"node --test tests/rules.test.mjs\""
+  }
+}

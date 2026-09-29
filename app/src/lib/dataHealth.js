@@ -4,8 +4,9 @@ import {
   collection, query, where, orderBy, limit as fbLimit, getDocs, getCountFromServer,
 } from 'firebase/firestore';
 import { db } from '../firebase';
+import { tcol, tdoc } from './tenant';
 
-const cnt = async (...w) => (await getCountFromServer(query(collection(db, 'leads'), ...w))).data().count;
+const cnt = async (...w) => (await getCountFromServer(query(tcol('leads'), ...w))).data().count;
 const CACHE_TTL = 30 * 60 * 1000;
 function cached(key, fn) {
   try {
@@ -65,7 +66,7 @@ export async function healthByPerson(users) {
 export async function fetchHealthLeads(bucketKey, cap = 600) {
   const c = HEALTH_CHECKS.find((x) => x.key === bucketKey);
   if (!c || !c.wheres) return { rows: [], capped: false };
-  const parts = [collection(db, 'leads'), ...c.wheres()];
+  const parts = [tcol('leads'), ...c.wheres()];
   if (bucketKey === 'overdue') parts.push(orderBy('next_followup', 'asc'));
   else if (bucketKey === 'stale') parts.push(orderBy('last_action_at', 'asc'));
   parts.push(fbLimit(cap + 1));
